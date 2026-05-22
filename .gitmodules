@@ -1,0 +1,3 @@
+[submodule "qobuz-api"]
+	path = qobuz-api
+	url = https://github.com/loxoron218/qobuz-api.git
