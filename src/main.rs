@@ -45,9 +45,15 @@ enum Command {
     /// Search the Qobuz catalog
     Search {
         query: String,
-        /// Filter by type: albums | tracks | artists | playlists  [default: albums]
+        /// Filter by type: albums | tracks | artists | playlists | all  [default: albums]
         #[arg(short = 't', long, default_value = "albums")]
         r#type: String,
+        /// Output tab-separated values for machine consumption
+        #[arg(long)]
+        tsv: bool,
+        /// Max results per type  [default: 20]
+        #[arg(short = 'n', long, default_value = "20")]
+        limit: u32,
     },
     /// Manage configuration
     Config {
@@ -106,9 +112,9 @@ fn run() -> Result<(), AppError> {
             download::run(&mut api, target, &quality, &output_dir, cfg.settings.concurrency)?;
         }
 
-        Command::Search { query, r#type } => {
+        Command::Search { query, r#type, tsv, limit } => {
             let mut api = build_authenticated_api(&cfg)?;
-            search::run(&mut api, &query, &r#type)?;
+            search::run(&mut api, &query, &r#type, tsv, limit)?;
         }
 
         Command::Config { action } => match action {
