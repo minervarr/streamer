@@ -1,6 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <string>
+#include <functional>
 #include "Renderer.h"
 #include "Config.h"
 #include "WheelPicker.h"
@@ -10,6 +11,7 @@ public:
     void Create(HWND parent, HINSTANCE hInst, Renderer* rend, Config* cfg);
     void Resize(int x, int y, int w, int h);
     void Show(bool visible);
+    void SetLogCallback(std::function<void(const std::wstring&)> cb) { m_onLog = cb; }
 
     static LRESULT CALLBACK PanelProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -41,6 +43,7 @@ private:
     HWND m_hLoginBtn = nullptr;
     Renderer* m_rend = nullptr;
     Config*   m_cfg  = nullptr;
+    std::function<void(const std::wstring&)> m_onLog;
 
     void LoadFields();
     void SaveFields();

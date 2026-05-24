@@ -151,6 +151,10 @@ void MainWindow::OnCreate() {
         QueueDownload(url, title);
     });
 
+    m_settings->SetLogCallback([this](const std::wstring& line) {
+        m_downloads->AppendLog(line);
+    });
+
     OnTab(Tab::Search);
 }
 

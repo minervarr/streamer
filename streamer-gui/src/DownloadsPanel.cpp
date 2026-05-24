@@ -53,6 +53,12 @@ static DWORD WINAPI DownloadWorker(LPVOID param) {
             std::string line = partial.substr(0, pos);
             partial = partial.substr(pos + 1);
             if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty()) {
+                int n = MultiByteToWideChar(CP_UTF8, 0, line.c_str(), -1, nullptr, 0);
+                auto* ws = new std::wstring(n > 0 ? n - 1 : 0, 0);
+                if (n > 0) MultiByteToWideChar(CP_UTF8, 0, line.c_str(), -1, ws->data(), n);
+                PostMessage(args->notify, WM_TASK_LOG, (WPARAM)args->taskIdx, (LPARAM)ws);
+            }
 
             // simple heuristic: if line contains a percentage
             auto pct_pos = line.find('%');
@@ -116,6 +122,11 @@ LRESULT DownloadsPanel::HandleMsg(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         delete errMsg;
         return 0;
     }
+    case WM_TASK_LOG: {
+        auto* line = reinterpret_cast<std::wstring*>(lp);
+        if (line) { AppendLog(*line); delete line; }
+        return 0;
+    }
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -162,16 +173,31 @@ void DownloadsPanel::Create(HWND parent, HINSTANCE hInst, Renderer* rend) {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, m_hwnd, (HMENU)(INT_PTR)ID_CANCEL_BTN, hInst, nullptr);
 
-    SendMessage(m_hList,      WM_SETFONT, (WPARAM)hf, TRUE);
-    SendMessage(m_hCancelBtn, WM_SETFONT, (WPARAM)hf, TRUE);
+    m_hLog = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL |
+        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+        0, 0, 0, 0, m_hwnd, (HMENU)(INT_PTR)ID_LOG, hInst, nullptr);
+
+    HFONT hfMono = CreateFontW(-12, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+        DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
+
+    SendMessage(m_hList,      WM_SETFONT, (WPARAM)hf,     TRUE);
+    SendMessage(m_hCancelBtn, WM_SETFONT, (WPARAM)hf,     TRUE);
+    SendMessage(m_hLog,       WM_SETFONT, (WPARAM)hfMono, TRUE);
 }
 
 void DownloadsPanel::Resize(int x, int y, int w, int h) {
     SetWindowPos(m_hwnd, nullptr, x, y, w, h, SWP_NOZORDER);
-    const int pad = 12;
-    int listH = h - pad * 3 - 36;
+    const int pad   = 12;
+    const int btnH  = 28;
+    const int logH  = 160;
+    int listH = h - pad*4 - btnH - logH;
+    if (listH < 40) listH = 40;
+
     SetWindowPos(m_hList,      nullptr, pad, pad, w - pad*2, listH, SWP_NOZORDER);
-    SetWindowPos(m_hCancelBtn, nullptr, w - pad - 160, pad + listH + pad, 160, 32, SWP_NOZORDER);
+    SetWindowPos(m_hCancelBtn, nullptr, w - pad - 160, pad + listH + pad, 160, btnH, SWP_NOZORDER);
+    int logY = pad + listH + pad + btnH + pad;
+    SetWindowPos(m_hLog,       nullptr, pad, logY, w - pad*2, h - logY - pad, SWP_NOZORDER);
 }
 
 void DownloadsPanel::Show(bool visible) {
@@ -242,6 +268,15 @@ void DownloadsPanel::OnDone(int taskIdx, bool ok, const std::wstring& msg) {
                  (msg == L"Cancelled" ? DownloadTask::Status::Cancelled : DownloadTask::Status::Error);
     t.errMsg   = msg;
     RefreshRow(taskIdx);
+    AppendLog((ok ? L"[Done] " : L"[Error] ") + t.title + (msg.empty() ? L"" : L" — " + msg));
+}
+
+void DownloadsPanel::AppendLog(const std::wstring& line) {
+    // Get current length, move caret to end, insert line + newline
+    int len = GetWindowTextLengthW(m_hLog);
+    SendMessageW(m_hLog, EM_SETSEL, len, len);
+    SendMessageW(m_hLog, EM_REPLACESEL, FALSE, (LPARAM)(line + L"\r\n").c_str());
+    SendMessageW(m_hLog, WM_VSCROLL, SB_BOTTOM, 0);
 }
 
 void DownloadsPanel::CancelSelected() {

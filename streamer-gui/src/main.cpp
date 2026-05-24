@@ -15,8 +15,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nCmdShow) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+        if (!IsDialogMessage(win.GetHwnd(), &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
     }
 
     CoUninitialize();

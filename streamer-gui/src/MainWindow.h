@@ -15,6 +15,7 @@ class MainWindow {
 public:
     bool Create(HINSTANCE hInst);
     void Show(int nCmdShow);
+    HWND GetHwnd() const { return m_hwnd; }
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
     // Called by panels to queue a download

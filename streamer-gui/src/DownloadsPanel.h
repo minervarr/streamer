@@ -16,9 +16,10 @@ struct DownloadTask {
     int listRow = -1;
 };
 
-// Posted to main HWND from worker thread
+// Posted to panel HWND from worker thread
 #define WM_TASK_PROGRESS (WM_USER + 1)
 #define WM_TASK_DONE     (WM_USER + 2)
+#define WM_TASK_LOG      (WM_USER + 3)   // lParam = new std::wstring*
 
 class DownloadsPanel {
 public:
@@ -26,6 +27,7 @@ public:
     void Resize(int x, int y, int w, int h);
     void Show(bool visible);
     void AddDownload(const std::wstring& url, const std::wstring& title);
+    void AppendLog(const std::wstring& line);
 
     // Called from MainWindow when WM_TASK_PROGRESS/DONE arrives
     void OnProgress(int taskIdx, int pct);
@@ -39,6 +41,7 @@ private:
     HWND m_hwnd       = nullptr;
     HWND m_hList      = nullptr;
     HWND m_hCancelBtn = nullptr;
+    HWND m_hLog       = nullptr;
     Renderer* m_rend  = nullptr;
 
     std::vector<DownloadTask> m_tasks;
@@ -50,4 +53,5 @@ private:
 
     static constexpr int ID_DL_LIST   = 400;
     static constexpr int ID_CANCEL_BTN= 401;
+    static constexpr int ID_LOG       = 402;
 };

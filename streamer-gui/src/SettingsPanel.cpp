@@ -14,7 +14,7 @@ static HWND MakeStatic(HWND parent, const wchar_t* text, bool bold, HFONT hf, HF
 }
 
 static HWND MakeEdit(HWND parent, int id, HFONT hf, bool password = false) {
-    DWORD style = WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL;
+    DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL;
     if (password) style |= ES_PASSWORD;
     HWND h = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", style,
         0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, nullptr, nullptr);
@@ -24,7 +24,7 @@ static HWND MakeEdit(HWND parent, int id, HFONT hf, bool password = false) {
 
 static HWND MakeBtn(HWND parent, int id, const wchar_t* label, HFONT hf) {
     HWND h = CreateWindowExW(0, L"BUTTON", label,
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, nullptr, nullptr);
     SendMessage(h, WM_SETFONT, (WPARAM)hf, TRUE);
     return h;
@@ -53,6 +53,15 @@ static std::wstring A2W(const std::string& s) {
     std::wstring w(n - 1, 0);
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
     return w;
+}
+
+static std::wstring EscapeArg(const std::wstring& v) {
+    std::wstring out;
+    for (wchar_t c : v) {
+        if (c == L'"') out += L'\\';
+        out += c;
+    }
+    return out;
 }
 
 // ── WndProc ──────────────────────────────────────────────────────────────────
@@ -127,7 +136,7 @@ void SettingsPanel::Create(HWND parent, HINSTANCE hInst, Renderer* rend, Config*
     m_hUserId  = MakeEdit(m_hwnd, ID_USER_ID, hf);
     m_hToken   = MakeEdit(m_hwnd, ID_TOKEN,   hf, true);
     m_hDir     = MakeEdit(m_hwnd, ID_DIR,     hf);
-    m_hDirBtn  = MakeBtn(m_hwnd, ID_DIR_BTN, L"Browse…", hf);
+    m_hDirBtn  = MakeBtn(m_hwnd, ID_DIR_BTN, L"Browse...", hf);
 
     m_quality.Create(m_hwnd, hInst, ID_QUALITY);
     for (auto* q : {L"mp3", L"flac", L"flac-hi", L"flac-ultra"})
@@ -247,25 +256,70 @@ void SettingsPanel::SaveFields() {
 }
 
 void SettingsPanel::DoLogin() {
-    SaveFields();
+    // Persist fields silently before launching the subprocess
+    m_cfg->app_id       = W2A(GetText(m_hAppId));
+    m_cfg->app_secret   = W2A(GetText(m_hSecret));
+    m_cfg->user_id      = W2A(GetText(m_hUserId));
+    m_cfg->auth_token   = W2A(GetText(m_hToken));
+    m_cfg->download_dir = W2A(GetText(m_hDir));
+    m_cfg->Save();
+
+    if (m_onLog) m_onLog(L"[Login] Attempting login...");
+
     std::wstring cmd = L"streamer.exe login"
-        L" --app-id \""     + A2W(m_cfg->app_id)     + L"\""
-        L" --app-secret \"" + A2W(m_cfg->app_secret) + L"\""
-        L" --user-id \""    + A2W(m_cfg->user_id)    + L"\""
-        L" --token \""      + A2W(m_cfg->auth_token)  + L"\"";
+        L" --user-id \"" + EscapeArg(A2W(m_cfg->user_id))   + L"\""
+        L" --token \""   + EscapeArg(A2W(m_cfg->auth_token)) + L"\"";
+
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+    HANDLE hRead, hWrite;
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return;
 
     STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdOutput = hWrite;
+    si.hStdError  = hWrite;
+
     PROCESS_INFORMATION pi = {};
-    if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
-            CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, 10000);
-        DWORD exit = 1;
-        GetExitCodeProcess(pi.hProcess, &exit);
-        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-        if (exit == 0)
-            MessageBoxW(m_hwnd, L"Login successful.", L"Login", MB_OK | MB_ICONINFORMATION);
-        else
-            MessageBoxW(m_hwnd, L"Login failed. Check credentials.", L"Login", MB_OK | MB_ICONERROR);
+    bool ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr,
+        TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(hWrite);
+
+    if (!ok) {
+        CloseHandle(hRead);
+        if (m_onLog) m_onLog(L"[Login] Failed to start streamer.exe");
+        MessageBoxW(m_hwnd, L"Failed to start streamer.exe", L"Login", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    // Read all output and log each line
+    char buf[1024];
+    std::string partial;
+    DWORD read;
+    while (ReadFile(hRead, buf, sizeof(buf) - 1, &read, nullptr) && read) {
+        buf[read] = 0;
+        partial += buf;
+        size_t pos;
+        while ((pos = partial.find('\n')) != std::string::npos) {
+            std::string line = partial.substr(0, pos);
+            partial = partial.substr(pos + 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty() && m_onLog) m_onLog(L"[Login] " + A2W(line));
+        }
+    }
+    if (!partial.empty() && m_onLog) m_onLog(L"[Login] " + A2W(partial));
+    CloseHandle(hRead);
+
+    WaitForSingleObject(pi.hProcess, 15000);
+    DWORD exit = 1;
+    GetExitCodeProcess(pi.hProcess, &exit);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+
+    if (exit == 0) {
+        if (m_onLog) m_onLog(L"[Login] Success.");
+        MessageBoxW(m_hwnd, L"Login successful.", L"Login", MB_OK | MB_ICONINFORMATION);
+    } else {
+        if (m_onLog) m_onLog(L"[Login] Failed (exit code " + std::to_wstring(exit) + L").");
+        MessageBoxW(m_hwnd, L"Login failed. Check the Downloads tab for details.", L"Login", MB_OK | MB_ICONERROR);
     }
 }
 
