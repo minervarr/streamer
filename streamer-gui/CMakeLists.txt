@@ -14,7 +14,6 @@ set(SOURCES
     src/Config.cpp
     src/QueryParser.cpp
     src/WheelPicker.cpp
-    src/LoginDialog.cpp
     src/Log.cpp
     src/Strings.cpp
 )
@@ -23,7 +22,6 @@ add_executable(streamer-gui WIN32 ${SOURCES})
 
 target_include_directories(streamer-gui PRIVATE
     src
-    vendor/WebView2/build/native/include
 )
 
 target_compile_definitions(streamer-gui PRIVATE
@@ -41,7 +39,6 @@ target_link_libraries(streamer-gui PRIVATE
     comctl32 comdlg32 shell32 shlwapi
     ole32 oleaut32 uuid advapi32
     version ws2_32
-    "${CMAKE_SOURCE_DIR}/vendor/WebView2/build/native/x64/WebView2LoaderStatic.lib"
 )
 
 # Copy streamer.exe next to the GUI

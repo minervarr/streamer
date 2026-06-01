@@ -6,7 +6,6 @@
 #include "Renderer.h"
 #include "Config.h"
 #include "WheelPicker.h"
-#include "LoginDialog.h"
 
 class SettingsPanel {
 public:
@@ -29,7 +28,8 @@ private:
     // ── Per-account login form ────────────────────────────────────
     HWND m_hLCountry  = nullptr;  HWND m_hCountry  = nullptr;
     HWND m_hLEmail    = nullptr;  HWND m_hEmail    = nullptr;
-    HWND m_hLPassword = nullptr;  HWND m_hPassword = nullptr;
+    HWND m_hLUserId   = nullptr;  HWND m_hUserId   = nullptr;
+    HWND m_hLToken    = nullptr;  HWND m_hToken    = nullptr;
     HWND m_hLoginBtn  = nullptr;
 
     // ── Global settings ───────────────────────────────────────────
@@ -59,7 +59,7 @@ private:
     void RefreshAccountList();
     void ShowAccountEdit(bool visible);
     void LoadAccountFields(int idx);
-    void DoWebLogin();
+    void DoTokenLogin();
     void SaveSettings();
     void BrowseDir();
     void ExportAccounts();
@@ -75,8 +75,9 @@ private:
     static constexpr int ID_DEL_ACCT   = 302;
     static constexpr int ID_COUNTRY    = 303;
     static constexpr int ID_EMAIL      = 304;
-    static constexpr int ID_PASSWORD   = 305;
-    static constexpr int ID_LOGIN      = 306;
+    static constexpr int ID_USER_ID    = 305;
+    static constexpr int ID_TOKEN      = 306;
+    static constexpr int ID_LOGIN      = 307;
     static constexpr int ID_DIR        = 310;
     static constexpr int ID_DIR_BTN    = 311;
     static constexpr int ID_QUALITY    = 312;

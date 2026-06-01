@@ -10,7 +10,6 @@
 
 \usepackage{xcolor}
 \definecolor{accent}{HTML}{1E88E5}
-\definecolor{bg}{HTML}{F5F5F5}
 \definecolor{darkbg}{HTML}{2D2D2D}
 \definecolor{green}{HTML}{43A047}
 \definecolor{red}{HTML}{E53935}
@@ -38,8 +37,8 @@
 }
 
 \usepackage{enumitem}
-\setlist[enumerate]{itemsep=2pt}
-\setlist[itemize]{itemsep=2pt}
+\setlist[enumerate]{itemsep=3pt}
+\setlist[itemize]{itemsep=3pt}
 
 \usepackage{booktabs}
 \usepackage{tabularx}
@@ -47,7 +46,7 @@
 \hypersetup{colorlinks=true, linkcolor=accent, urlcolor=accent}
 
 \usepackage{titlesec}
-\titleformat{\section}{\Large\bfseries\color{accent}}{}{0pt}{}
+\titleformat{\section}{\Large\bfseries\color{accent}}{}{0pt}{}[\vspace{2pt}\hrule\vspace{4pt}]
 \titleformat{\subsection}{\large\bfseries}{}{0pt}{}
 \titleformat{\subsubsection}{\normalsize\bfseries}{}{0pt}{}
 
@@ -58,352 +57,539 @@
 \begin{center}
 {\fontsize{28}{34}\selectfont\bfseries\color{accent} Streamer}\\[6pt]
 {\large Qobuz Music Downloader --- User Manual}\\[4pt]
-{\small Version 0.1 --- May 2026}
+{\small Version 0.2 --- June 2026}
 \end{center}
 
 \vspace{1em}
 \tableofcontents
-\vspace{1em}
 
 %=============================================================================
-\section{What is Streamer?}
+\section{Overview}
 %=============================================================================
 
-Streamer downloads music from Qobuz in the quality you choose --- from MP3 all
-the way up to 24-bit/192\,kHz Hi-Res FLAC.  It comes in two flavors:
+Streamer downloads music from Qobuz --- from 320\,kbps MP3 up to
+24-bit/192\,kHz Hi-Res FLAC.  It comes in two forms that share the same
+config file:
 
 \begin{itemize}
-  \item \textbf{GUI} (graphical app) --- search, browse, and download with
-        clicks.  Requires Windows~10+ with Microsoft Edge installed.
-  \item \textbf{CLI} (command line) --- scriptable, fast, works in terminals.
+  \item \textbf{streamer-gui.exe} --- graphical app for Windows.  Search, pick
+        what you want, and download.  Works on any Windows~10+ machine.
+  \item \textbf{streamer.exe} --- command-line tool.  Faster, scriptable, and
+        runs anywhere you can open a terminal.
 \end{itemize}
 
-Both read the same config file, so credentials set up in one work in the other.
+A valid Qobuz subscription is required.
 
 %=============================================================================
-\section{First-Time Setup}
+\section{Login --- Getting Your Credentials}
 %=============================================================================
 
-\subsection{Step 1 --- Open the App}
+Qobuz blocks direct email/password login from third-party tools.  Streamer
+instead reads your session token from a browser where you are already logged
+in, using a small browser script.  You only need to do this once (or whenever
+your token expires, which is rare).
 
-Double-click \texttt{streamer-gui.exe}. The window has three tabs at the top:
-\textbf{Search}, \textbf{Downloads}, and \textbf{Settings}.  Go to
-\textbf{Settings} first.
-
-\subsection{Step 2 --- Create an Account Slot}
-
-Click \textbf{+ Add}.  A new empty row appears in the account list on the left.
-Click it to select it.
-
-\subsection{Step 3 --- Log In}
+\subsection{Step 1 --- Install the Userscript}
 
 \begin{enumerate}
-  \item Type your \textbf{email} in the Email field (optional, just for display).
-  \item Click \textbf{Login with Qobuz}.
-  \item A browser window opens inside the app showing the Qobuz login page.
-  \item Log in with your Qobuz account (email/password, Google, Apple, etc.).
-  \item The browser closes automatically once login succeeds.
-  \item You see \emph{``Login successful.''} --- done!
+  \item Install \textbf{Violentmonkey} (Firefox, Chrome, Edge) or
+        \textbf{Tampermonkey} from your browser's extension store.
+  \item Drag the file \texttt{streamer-login.user.js} (located in the same
+        folder as \texttt{streamer-gui.exe}) onto the Violentmonkey dashboard
+        tab, or open it directly in your browser.
+  \item Click \textbf{Install} when the extension asks.
 \end{enumerate}
 
+\subsection{Step 2 --- Copy the Login Command}
+
+\begin{enumerate}
+  \item Open \texttt{https://play.qobuz.com} and log in normally --- with your
+        email and password, Google, or Apple.  The script runs on that page.
+  \item A button appears in the bottom-right corner of the page. It starts
+        dimmed while waiting for your session to load:
+
+        \medskip
+        {\ttfamily\small\color{accent} [waiting] Waiting for login\ldots}
+        \medskip
+
+  \item Once the page has loaded your session (a second or two), the button
+        becomes clickable:
+
+        \medskip
+        {\ttfamily\small\color{accent} [copy] Copy streamer login}
+        \medskip
+
+  \item Click it.  The script intercepts the authentication token that Qobuz
+        sends with every page request and copies this command to your clipboard:
+\end{enumerate}
+
+\begin{cmdbox}
+streamer.exe login --user-id "12345678" --token "eyJhb..."
+\end{cmdbox}
+
+\subsection{Step 3A --- Save via the GUI}
+
+\begin{enumerate}
+  \item Open \texttt{streamer-gui.exe} and go to the \textbf{Settings} tab.
+  \item Click \textbf{+ Add} and select the new empty row.
+  \item From the clipboard command, copy \emph{only the number} after
+        \texttt{-{}-user-id} and paste it into the \textbf{User ID} field.
+  \item Copy the long string after \texttt{-{}-token} and paste it into the
+        \textbf{Token} field.
+  \item Click \textbf{Save Credentials}.
+\end{enumerate}
+
+On success the row shows \textbf{Authenticated} and your country code (US, FR,
+etc.)\ is detected automatically.
+
 \begin{tipbox}
-The country code (US, FR, etc.) is detected automatically from your account.
-You do not need to type it.
+If you have multiple accounts (e.g.\ one US, one FR), repeat Steps~2--3 for
+each account and add a separate row for each.
 \end{tipbox}
+
+\subsection{Step 3B --- Save via the CLI}
+
+Paste the copied command directly into a terminal:
+
+\begin{cmdbox}
+streamer.exe login --user-id "12345678" --token "eyJhb..."
+\end{cmdbox}
+
+The tool contacts Qobuz to verify the token, detects your country code, and
+writes everything to the config file.  You should see:
+
+\begin{cmdbox}
+Country: US\\
+Login successful. Config saved.
+\end{cmdbox}
 
 \subsection{Step 4 --- Set Your Download Folder}
 
-Still in Settings:
-\begin{enumerate}
-  \item Click \textbf{Browse...} next to the Download Dir field.
-  \item Pick the folder where you want your music saved.
-  \item Click \textbf{Save Settings}.
-\end{enumerate}
+In the \textbf{Settings} tab, click \textbf{Browse\ldots} next to
+\emph{Download Dir}, pick a folder, and click \textbf{Save Settings}.
 
-\subsection{Step 5 --- Pick a Quality}
+Or from the terminal:
 
-Scroll the Quality wheel to your preferred level:
+\begin{cmdbox}
+streamer.exe config set-dir "D:\textbackslash{}Music"
+\end{cmdbox}
+
+\subsection{Step 5 --- Choose a Default Quality}
 
 \begin{center}
-\begin{tabular}{@{}lll@{}}
+\begin{tabular}{@{}llr@{}}
 \toprule
-\textbf{Level} & \textbf{Format} & \textbf{Typical size (per album)} \\
+\textbf{Setting}  & \textbf{Format}            & \textbf{Approx.\ size / album} \\
 \midrule
-mp3        & 320\,kbps MP3        & $\sim$100\,MB \\
-flac       & 16-bit / 44.1\,kHz   & $\sim$300\,MB \\
-flac-hi    & 24-bit / 96\,kHz     & $\sim$1\,GB \\
-flac-ultra & 24-bit / 192\,kHz    & $\sim$2\,GB \\
+\texttt{mp3}        & 320\,kbps MP3              & $\sim$100\,MB \\
+\texttt{flac}       & FLAC 16-bit / 44.1\,kHz   & $\sim$300\,MB \\
+\texttt{flac-hi}    & FLAC 24-bit / 96\,kHz      & $\sim$1\,GB   \\
+\texttt{flac-ultra} & FLAC 24-bit / 192\,kHz     & $\sim$2\,GB   \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Click \textbf{Save Settings} when done.
+Scroll the \textbf{Quality} wheel in Settings and click \textbf{Save
+Settings}.  You can override the quality per download from the CLI with
+\texttt{-{}-quality}.
 
 %=============================================================================
-\section{Searching for Music}
+\section{Searching --- GUI}
 %=============================================================================
 
-Go to the \textbf{Search} tab.
+Click the \textbf{Search} tab.
 
-\subsection{Basic Search}
-
-Type what you want and press \textbf{Enter}:
-
-\begin{cmdbox}
-daft punk
-\end{cmdbox}
-
-Results appear in a table.  Each row shows: Title, Artist, Label, Date,
-Duration, Genre, Hi-Res, Explicit, Type, and Country.
-
-\subsection{Filters}
-
-You can narrow results by adding \texttt{field:value} filters.
-Use quotes around multi-word values.
-
-\begin{center}
-\begin{tabularx}{\linewidth}{@{}lXl@{}}
-\toprule
-\textbf{Filter} & \textbf{What it does} & \textbf{Example} \\
-\midrule
-\texttt{artist:"..."}  & Match artist name     & \texttt{artist:"Taylor Swift"} \\
-\texttt{title:"..."}   & Match title           & \texttt{title:"Anti-Hero"} \\
-\texttt{genre:...}     & Match genre           & \texttt{genre:jazz} \\
-\texttt{label:...}     & Match record label    & \texttt{label:republic} \\
-\texttt{type:...}      & Content type          & \texttt{type:album} \\
-\texttt{country:...}   & Account country       & \texttt{country:US} \\
-\texttt{year:...}      & Release year          & \texttt{year:2024} \\
-\texttt{year:...-...}  & Year range            & \texttt{year:2020-2024} \\
-\texttt{hires:true}    & Hi-Res only           & \texttt{hires:true} \\
-\texttt{explicit:true} & Explicit only         & \texttt{explicit:true} \\
-\texttt{explicit:false} & Clean versions only  & \texttt{explicit:false} \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-\subsection{Combining Filters}
-
-Filters are combined with \textbf{AND} by default (just put them next to each
-other).  You can also use \textbf{OR}, \textbf{NOT}, and parentheses:
-
-\begin{cmdbox}
-"the life of a showgirl" artist:"taylor swift" explicit:true NOT type:playlist
-\end{cmdbox}
-
-This means: search for ``the life of a showgirl'', only from Taylor Swift, only
-explicit versions, and exclude playlists.
-
-More examples:
-
-\begin{cmdbox}
-artist:"Pink Floyd" year:1970-1980 hires:true
-\end{cmdbox}
-
-\begin{cmdbox}
-(artist:"Daft Punk" OR artist:"Justice") type:album
-\end{cmdbox}
-
-\begin{cmdbox}
-genre:classical NOT explicit:true
-\end{cmdbox}
-
-\subsection{Understanding the Results}
-
-Results are \textbf{grouped by artist} and sorted newest-first within each
-group.  The columns tell you:
-
-\begin{itemize}
-  \item \textbf{Title} --- includes the version in parentheses if available,
-        e.g.\ \emph{Midnights (Deluxe)} vs.\ \emph{Midnights}.
-  \item \textbf{Label} --- the record label (helps distinguish pressings).
-  \item \textbf{Date} --- full release date, not just the year.
-  \item \textbf{E} --- shows \textbf{E} for explicit content.
-  \item \textbf{Hi-Res} --- shows \textbf{Yes} if hi-res audio is available.
-  \item \textbf{Country} --- which of your accounts found this result.
-\end{itemize}
-
-%=============================================================================
-\section{Downloading}
-%=============================================================================
-
-\subsection{From Search Results}
+\subsection{How a Search Works}
 
 \begin{enumerate}
-  \item Click a row in the search results.
-  \item Click \textbf{Download Selected} (or right-click and choose Download).
-  \item Switch to the \textbf{Downloads} tab to watch progress.
+  \item Type your query in the search box and press \textbf{Enter} (or click
+        \textbf{Search}).  Streamer fetches up to 50 results per content type
+        per account from Qobuz.
+  \item Results appear in the table immediately.  A counter above the list
+        shows \textbf{N\,/\,M results}: N is how many pass the current filter,
+        M is the total fetched.
+  \item \textbf{As you keep typing}, the visible results are filtered
+        in real time --- without hitting the network again.  This lets you
+        quickly narrow a large result set without a new search.
 \end{enumerate}
 
-\subsection{From a URL}
+\subsection{The Type Picker}
 
-Paste a Qobuz link into the \textbf{URL bar} at the top and press
-\textbf{Enter}:
-
-\begin{cmdbox}
-https://www.qobuz.com/us-en/album/random-access-memories/abcdef123
-\end{cmdbox}
-
-\subsection{What Gets Downloaded}
-
-For each album, Streamer creates:
-
-\begin{cmdbox}
-Music/
-  Artist Name/
-    Album Title/
-      01.flac
-      02.flac
-      ...
-      cover.jpg
-      album\_description.txt   (if available)
-      booklet.pdf              (if available)
-    artist\_bio.txt             (if available)
-    artist.jpg                 (if available)
-\end{cmdbox}
-
-If you have multiple accounts with different countries, a country subfolder
-is added: \texttt{Music/US/Artist/Album/...}
-
-\subsection{Downloads Tab}
-
-The Downloads tab shows:
-\begin{itemize}
-  \item A \textbf{list} of all queued/active/completed downloads with status
-        and progress percentage.
-  \item A \textbf{log area} at the bottom with detailed messages (useful if
-        something goes wrong).
-  \item A \textbf{Cancel Selected} button to stop a running download.
-\end{itemize}
-
-%=============================================================================
-\section{Keyboard Shortcuts}
-%=============================================================================
+The scroll wheel on the right side of the search bar selects what kind of
+content to fetch:
 
 \begin{center}
 \begin{tabular}{@{}ll@{}}
 \toprule
-\textbf{Shortcut} & \textbf{Action} \\
+\textbf{Mode}      & \textbf{What it does} \\
 \midrule
-Enter              & Search (in search box) or Download (in URL bar) \\
-Ctrl+A             & Select all text in the current field \\
-Ctrl+Backspace     & Delete previous word \\
-Ctrl+Delete        & Delete next word \\
-Tab                & Move to next field \\
+Smart (auto)   & Detects the type from your query (see below) \\
+Albums         & Only album results \\
+Tracks         & Only track results \\
+Artists        & Only artist results \\
+Playlists      & Only playlist results \\
+All types      & Fetch all four types at once \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-%=============================================================================
-\section{Multiple Accounts}
-%=============================================================================
+\textbf{Smart (auto)} looks for a \texttt{type:} filter in your query and
+uses that as the API type.  If no type filter is found, it fetches all types.
+Example: typing \texttt{pink floyd type:album} on Smart mode only fetches
+albums from the API --- faster than fetching everything.
 
-You can add several Qobuz accounts (e.g.\ one US, one FR) to access
-region-specific catalogs.
+\subsection{Filter Syntax}
 
-\begin{enumerate}
-  \item Go to \textbf{Settings} and click \textbf{+ Add} for each account.
-  \item Log in to each one.
-  \item When you search, results from \emph{all} accounts are merged.
-        The \textbf{Country} column tells you which account found each result.
-  \item Downloads automatically use the correct account.
-\end{enumerate}
+Inside the search box you can combine free-text terms with structured filters.
+Filters have the form \texttt{field:value} or, for numeric fields,
+\texttt{field:>value}.
 
-You can export/import your accounts with the \textbf{Export Accounts} and
-\textbf{Import Accounts} buttons (saves as JSON, useful for backup).
+\subsubsection{String filters (partial match, case-insensitive)}
 
-%=============================================================================
-\section{Command Line Usage}
-%=============================================================================
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X l@{}}
+\toprule
+\textbf{Filter} & \textbf{Matches} & \textbf{Example} \\
+\midrule
+\texttt{artist:value}   & Artist name contains value  & \texttt{artist:"pink floyd"} \\
+\texttt{title:value}    & Title contains value        & \texttt{title:"wish you were"} \\
+\texttt{genre:value}    & Genre contains value        & \texttt{genre:jazz} \\
+\texttt{label:value}    & Record label contains value & \texttt{label:ecm} \\
+\texttt{type:value}     & Content type                & \texttt{type:album} \\
+\texttt{country:value}  & Account country             & \texttt{country:US} \\
+\bottomrule
+\end{tabularx}
+\end{center}
 
-For advanced users or scripting, \texttt{streamer.exe} can be used directly in
-a terminal.
+\subsubsection{Numeric filters (year and duration)}
 
-\subsection{Login}
+\texttt{year} is the release year.  \texttt{duration} is in \textbf{seconds}.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Operator} & \textbf{Meaning} \\
+\midrule
+\texttt{year:2024}        & Exact year \\
+\texttt{year:2020-2024}   & Year range (inclusive) \\
+\texttt{year:>2020}       & After 2020 \\
+\texttt{year:<=1975}      & Up to and including 1975 \\
+\texttt{duration:>=600}   & At least 10 minutes (600 s) \\
+\texttt{duration:<180}    & Under 3 minutes \\
+\texttt{duration:300-600} & Between 5 and 10 minutes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Boolean filters}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Filter}         & \textbf{Meaning} \\
+\midrule
+\texttt{hires:true}     & Hi-Res audio available \\
+\texttt{hires:false}    & Standard resolution only \\
+\texttt{explicit:true}  & Explicit content \\
+\texttt{explicit:false} & Clean / censored version \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Logical operators}
+
+Terms next to each other are AND by default.  You can also use:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Operator} & \textbf{Aliases} & \textbf{Example} \\
+\midrule
+AND (implicit) & \texttt{AND}, \texttt{y}, \texttt{\&\&} & \texttt{pink floyd hires:true} \\
+OR             & \texttt{OR}, \texttt{o}, \texttt{||} & \texttt{artist:coltrane OR artist:mingus} \\
+NOT            & \texttt{NOT}, \texttt{!}            & \texttt{jazz NOT explicit:true} \\
+Parentheses    & \texttt{(} \texttt{)}               & \texttt{(artist:coltrane OR artist:mingus) type:album} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Spanish aliases}
+
+All field names are also accepted in Spanish:
+\texttt{artista}, \texttt{título}, \texttt{álbum}, \texttt{género},
+\texttt{sello}, \texttt{tipo}, \texttt{país}, \texttt{año},
+\texttt{duración}, \texttt{alta\_res}, \texttt{explícito}.
+
+Boolean values are also accepted in Spanish: \texttt{sí} / \texttt{verdadero}
+for \texttt{true}, and \texttt{no} / \texttt{falso} for \texttt{false}.
+
+\subsection{Practical Examples}
 
 \begin{cmdbox}
-streamer.exe web-login --email you@example.com --password secret
+pancrasia type:album duration:>=600
+\end{cmdbox}
+Albums matching ``pancrasia'' with total duration at least 10 minutes.
+
+\begin{cmdbox}
+artist:"pink floyd" year:1970-1980 hires:true
+\end{cmdbox}
+Hi-Res Pink Floyd albums from the 1970s.
+
+\begin{cmdbox}
+(artist:"coltrane" OR artist:"mingus") type:track duration:>480
+\end{cmdbox}
+Tracks over 8 minutes by Coltrane or Mingus.
+
+\begin{cmdbox}
+género:jazz año:>2020 NOT explícito:sí
+\end{cmdbox}
+Clean jazz releases from after 2020.
+
+\subsection{Reading the Results}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Column}  & \textbf{Content} \\
+\midrule
+Title    & Name, with version in parentheses when available \\
+Artist   & Primary artist or performer \\
+Label    & Record label \\
+Date     & Full release date \\
+Duration & Track or album total length (m:ss) \\
+Genre    & Genre tag \\
+Hi-Res   & \emph{Yes} if hi-res audio is available \\
+E        & Explicit content marker \\
+Type     & album / track / artist / playlist \\
+Country  & Which of your accounts returned this result \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Results are grouped by artist, then sorted newest-first within each artist.
+When you click a row, a short summary appears in the counter area above
+the list.
+
+%=============================================================================
+\section{Downloading --- GUI}
+%=============================================================================
+
+\subsection{Downloading One Item}
+
+Right-click any row and choose \textbf{Download}, or click a row to select it
+and then click \textbf{Download Selected} at the bottom right.
+
+\subsection{Downloading Multiple Items (the Cart)}
+
+\begin{enumerate}
+  \item \textbf{Tick the checkbox} on the left of each row you want.  Checked
+        items appear in a \textbf{Selected} list below the results table and
+        stay checked even if you run a new search.
+  \item The button at the bottom right updates to show how many items are
+        queued: \textbf{Download (3)}, for example.
+  \item Click \textbf{Download (N)} to send all queued items to the
+        \textbf{Downloads} tab.  The cart clears automatically.
+  \item Click \textbf{Clear All} in the Selected section to uncheck everything
+        without downloading.
+\end{enumerate}
+
+\begin{tipbox}
+The cart survives new searches.  You can search for ``Coltrane'', tick some
+albums, then search for ``Miles Davis'', tick more albums, and download all of
+them at once.
+\end{tipbox}
+
+\subsection{What Gets Saved to Disk}
+
+\begin{cmdbox}
+Music/\\
+  US/\\
+~~~~Artist Name/\\
+~~~~~~~~Album Title/\\
+~~~~~~~~~~~~01. Track Title.flac\\
+~~~~~~~~~~~~02. Track Title.flac\\
+~~~~~~~~~~~~...\\
+~~~~~~~~~~~~cover.jpg\\
+~~~~~~~~~~~~album\_description.txt~~(if available)\\
+~~~~~~~~~~~~booklet.pdf~~~~~~~~~~~~~(if available)\\
+~~~~artist\_bio.txt~~~~~~~~~~~~~~~~~~(if available)\\
+~~~~artist.jpg~~~~~~~~~~~~~~~~~~~~~~(if available)
 \end{cmdbox}
 
-\subsection{Download an Album}
+If you have only one account with no country set, the country subfolder
+(\texttt{US/}) is omitted.
+
+\subsection{The Downloads Tab}
+
+Switch here to watch progress.  The top part lists every queued and active
+download with its current status.  The log at the bottom shows detailed
+messages --- check it if something fails.
+
+%=============================================================================
+\section{Searching and Downloading --- CLI}
+%=============================================================================
+
+\subsection{Search}
+
+\begin{cmdbox}
+streamer.exe search "pink floyd" --type albums
+\end{cmdbox}
+
+Available types: \texttt{albums}, \texttt{tracks}, \texttt{artists},
+\texttt{playlists}, \texttt{all}.  Default is \texttt{albums}.
+
+\medskip
+Limit the number of results (default 20):
+
+\begin{cmdbox}
+streamer.exe search "coltrane" --type tracks -n 50
+\end{cmdbox}
+
+\subsection{Duration Filter}
+
+The CLI supports \texttt{-{}-min-duration} and \texttt{-{}-max-duration}.
+When either flag is active, the duration is shown in brackets next to each
+result (\texttt{[1:08:58]}).  Accepted formats:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Format}  & \textbf{Meaning} \\
+\midrule
+\texttt{600}     & 600 seconds (bare integer) \\
+\texttt{90s}     & 90 seconds \\
+\texttt{10m}     & 10 minutes \\
+\texttt{2h}      & 2 hours \\
+\texttt{1h30m}   & 1 hour 30 minutes \\
+\texttt{1:30}    & 1 min 30 s (mm:ss) \\
+\texttt{1:30:00} & 1 h 30 min (hh:mm:ss) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{cmdbox}
+streamer.exe search "pancrasia" --type albums --min-duration 10m
+\end{cmdbox}
+
+\begin{cmdbox}
+streamer.exe search "coltrane" --type tracks --min-duration 8m --max-duration 20m
+\end{cmdbox}
+
+\begin{warnbox}
+Duration filtering happens after the API responds.  Streamer fetches up to
+$5\times$ the requested limit to compensate, but if very few results in the
+catalog match your range, you may receive fewer rows than \texttt{-n} asks for.
+Raise \texttt{-n} if needed.
+\end{warnbox}
+
+Add \texttt{-{}-tsv} for tab-separated output (columns: id, title, artist,
+label, date, \textbf{duration in seconds}, genre, hires, type, explicit):
+
+\begin{cmdbox}
+streamer.exe search "pancrasia" --type albums --min-duration 10m --tsv
+\end{cmdbox}
+
+\subsection{Download}
+
+By URL:
 
 \begin{cmdbox}
 streamer.exe download "https://www.qobuz.com/us-en/album/..." --quality flac-hi
 \end{cmdbox}
 
-Or with a bare ID:
+By bare ID (album IDs are alphanumeric strings; track IDs are integers):
 
 \begin{cmdbox}
-streamer.exe download abc123def --quality flac
+streamer.exe download abc123def\\
+streamer.exe download 12345678 --quality flac
 \end{cmdbox}
 
-\subsection{Search}
+Use \texttt{-{}-account N} (0-based) to pick which account to download with.
+The default is account 0.
 
-\begin{cmdbox}
-streamer.exe search "pink floyd" --type albums -n 50
-\end{cmdbox}
+%=============================================================================
+\section{Multiple Accounts}
+%=============================================================================
 
-Add \texttt{-{}-tsv} for machine-readable output (tab-separated).
+You can add as many Qobuz accounts as you like --- one per country is common
+when catalogs differ by region.
 
-\subsection{Change Settings}
+\begin{itemize}
+  \item In the GUI: click \textbf{+ Add} in Settings for each account and log
+        in to each one separately.
+  \item With the CLI: run \texttt{login} once per account.  Each call creates
+        a new account slot (matched by user ID, so running it again for the
+        same account just refreshes the token).
+\end{itemize}
 
-\begin{cmdbox}
-streamer.exe config set-dir "D:\textbackslash{}Music"
-streamer.exe config set-quality flac-ultra
-streamer.exe config show
-\end{cmdbox}
+When you search in the GUI, Streamer queries \emph{every} configured account
+and merges the results.  The \textbf{Country} column tells you which account
+found each row, and the correct account is used automatically when you download.
+
+Use \textbf{Export Accounts} / \textbf{Import Accounts} in Settings to back
+up your credentials as a JSON file.
 
 %=============================================================================
 \section{Configuration File}
 %=============================================================================
 
-Location: \texttt{\%APPDATA\%\textbackslash streamer\textbackslash config.toml}
-
-You normally don't need to edit it by hand (the GUI and CLI manage it), but
-it looks like this:
+Location: \texttt{\%APPDATA\%\textbackslash{}streamer\textbackslash{}config.toml}
 
 \begin{cmdbox}
 {[[}accounts{]]}\\
-country = "US"\\
-email = "you@example.com"\\
+country = "US"~~~~~~~~~~\# set automatically on login\\
+email = ""~~~~~~~~~~~~~~\# optional, display only\\
 app\_id = "..."\\
 app\_secret = "..."\\
-user\_id = "12345"\\
+user\_id = "12345678"\\
 auth\_token = "..."\\[6pt]
 {[}settings{]}\\
 download\_dir = "C:/Users/You/Music"\\
-quality = "flac"\\
-concurrency = 4\\
-requests\_per\_minute = 0
+quality = "flac-ultra"~~\# mp3 | flac | flac-hi | flac-ultra\\
+concurrency = 8~~~~~~~~~\# parallel download workers\\
+requests\_per\_minute = 0 \# 0 = no limit
 \end{cmdbox}
+
+All fields are managed by the GUI and CLI.  You can edit this file by hand if
+needed, but be careful to keep valid TOML syntax.
 
 %=============================================================================
 \section{Troubleshooting}
 %=============================================================================
 
 \begin{description}[style=nextline]
-  \item[Login dialog opens but nothing loads]
-    Make sure Microsoft Edge is installed.  The login dialog uses Edge's
-    WebView2 engine.
 
-  \item[Download fails with ``os error 123'']
-    The download directory path is invalid.  Go to Settings, click Browse,
-    pick a valid folder, and Save Settings.
+  \item[The script button stays dimmed after the page loads]
+    The script captures tokens from network requests that happen \emph{after}
+    the page starts.  If the tab was already open when you installed the
+    script, reload the page (\textbf{F5}).  Make sure you are signed in to
+    \texttt{play.qobuz.com} before clicking.
 
-  \item[App crashes on login]
-    Check the log file at
-    \texttt{\%APPDATA\%\textbackslash streamer\textbackslash streamer-gui.log}
-    --- it records what happened right before the crash.
+  \item[``Login successful'' but the account shows Not logged in in the GUI]
+    The GUI reads the config file on startup.  Restart \texttt{streamer-gui.exe}
+    after logging in from the CLI, or use the GUI's own credential fields.
 
-  \item[Search returns no results]
-    Check that at least one account is logged in (Settings tab should show
-    ``Authenticated'').
+  \item[Download fails with ``401 Unauthorized'' or ``Not authenticated'']
+    Your session token has expired.  Repeat the login steps (Section~2) to
+    get a fresh token.
 
-  \item[Linker error ``cannot open file streamer-gui.exe'']
-    The app is still running. Close it first, then rebuild.
+  \item[Download fails with a path error (``os error 123'' on Windows)]
+    The download directory path is invalid or does not exist.  Go to Settings,
+    click Browse, pick an existing folder, and Save Settings.
 
-  \item[Garbled characters in file names]
-    Make sure you built the GUI with the \texttt{/utf-8} compiler flag
-    (already set in CMakeLists.txt).
+  \item[Search returns nothing, or ``No account at index 0'']
+    No account is configured.  Check the Settings tab: at least one row must
+    show \textbf{Authenticated}.  If all show ``Not logged in'', follow
+    Section~2 to log in again.
+
+  \item[Duration filter returns fewer results than requested]
+    Expected --- see the warning box in Section~5.2.  Increase \texttt{-n}.
+
+  \item[File names contain garbled characters]
+    This is a build issue: ensure \texttt{streamer-gui.exe} was compiled with
+    the \texttt{/utf-8} flag (it is set in \texttt{CMakeLists.txt} by default).
+    Re-download or rebuild.
+
 \end{description}
 
 \vfill

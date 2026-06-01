@@ -100,7 +100,7 @@ LRESULT SettingsPanel::HandleMsg(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ShowAccountEdit(false);
             }
             return 0;
-        case ID_LOGIN:    DoWebLogin();     return 0;
+        case ID_LOGIN:    DoTokenLogin();   return 0;
         case ID_DIR_BTN:  BrowseDir();      return 0;
         case ID_SAVE_SET: SaveSettings();   return 0;
         case ID_EXPORT:   ExportAccounts(); return 0;
@@ -167,10 +167,11 @@ void SettingsPanel::Create(HWND parent, HINSTANCE hInst, Renderer* rend, Config*
     m_hDelBtn = MakeBtn(m_hwnd, ID_DEL_ACCT, T(L"Remove"), hf);
 
     // Per-account login form
-    m_hLCountry  = MakeLabel(m_hwnd, T(L"Country"),  hf);  m_hCountry  = MakeEdit(m_hwnd, ID_COUNTRY,  hf);
-    m_hLEmail    = MakeLabel(m_hwnd, T(L"Email"),    hf);  m_hEmail    = MakeEdit(m_hwnd, ID_EMAIL,    hf);
-    m_hLPassword = MakeLabel(m_hwnd, T(L"Password"), hf);  m_hPassword = MakeEdit(m_hwnd, ID_PASSWORD, hf, true);
-    m_hLoginBtn  = MakeBtn(m_hwnd, ID_LOGIN, T(L"Login with Qobuz"), hf);
+    m_hLCountry = MakeLabel(m_hwnd, T(L"Country"), hf);  m_hCountry = MakeEdit(m_hwnd, ID_COUNTRY, hf);
+    m_hLEmail   = MakeLabel(m_hwnd, T(L"Email"),   hf);  m_hEmail   = MakeEdit(m_hwnd, ID_EMAIL,   hf);
+    m_hLUserId  = MakeLabel(m_hwnd, T(L"User ID"), hf);  m_hUserId  = MakeEdit(m_hwnd, ID_USER_ID, hf);
+    m_hLToken   = MakeLabel(m_hwnd, T(L"Token"),   hf);  m_hToken   = MakeEdit(m_hwnd, ID_TOKEN,   hf, true);
+    m_hLoginBtn = MakeBtn(m_hwnd, ID_LOGIN, T(L"Save Credentials"), hf);
 
     // Global settings
     m_hHdSet = CreateWindowExW(0,L"STATIC",T(L"Settings"),WS_CHILD|WS_VISIBLE|SS_LEFT,0,0,0,0,m_hwnd,nullptr,nullptr,nullptr);
@@ -245,9 +246,10 @@ void SettingsPanel::Resize(int x, int y, int w, int h) {
         SetWindowPos(inp, nullptr, ix, cy, iW, eh, SWP_NOZORDER);
         cy += row;
     };
-    placeRow(m_hLCountry,  m_hCountry,  60);
-    placeRow(m_hLEmail,    m_hEmail);
-    placeRow(m_hLPassword, m_hPassword);
+    placeRow(m_hLCountry, m_hCountry, 60);
+    placeRow(m_hLEmail,   m_hEmail);
+    placeRow(m_hLUserId,  m_hUserId);
+    placeRow(m_hLToken,   m_hToken);
     SetWindowPos(m_hLoginBtn, nullptr, ix, cy, 150, 28, SWP_NOZORDER);
     cy += 38;
 
@@ -305,7 +307,7 @@ void SettingsPanel::RefreshAccountList() {
 void SettingsPanel::ShowAccountEdit(bool visible) {
     int sw = visible ? SW_SHOW : SW_HIDE;
     for (HWND h : {m_hLCountry, m_hCountry, m_hLEmail, m_hEmail,
-                   m_hLPassword, m_hPassword, m_hLoginBtn})
+                   m_hLUserId, m_hUserId, m_hLToken, m_hToken, m_hLoginBtn})
         ShowWindow(h, sw);
 }
 
@@ -314,72 +316,35 @@ void SettingsPanel::LoadAccountFields(int idx) {
     auto& a = m_cfg->accounts[idx];
     SetWindowTextW(m_hCountry, W2W(a.country).c_str());
     SetWindowTextW(m_hEmail,   W2W(a.email).c_str());
-    SetWindowTextW(m_hPassword, L"");  // never pre-fill password from storage
+    SetWindowTextW(m_hUserId,  W2W(a.user_id).c_str());
+    SetWindowTextW(m_hToken,   L"");  // never pre-fill token from storage
 }
 
-// ── Web login (via embedded WebView2 browser) ─────────────────────────────────
+// ── Token login (paste user_id + token from userscript) ───────────────────────
 
-// Runs a streamer.exe command synchronously and returns its stdout output.
-static std::wstring RunStreamerCapture(const std::wstring& args) {
-    std::wstring cmd = L"streamer.exe " + args;
-    SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
-    HANDLE hRead, hWrite;
-    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return {};
-    STARTUPINFOW si = { sizeof(si) };
-    si.dwFlags = STARTF_USESTDHANDLES; si.hStdOutput = hWrite; si.hStdError = hWrite;
-    PROCESS_INFORMATION pi = {};
-    bool ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-    CloseHandle(hWrite);
-    if (!ok) { CloseHandle(hRead); return {}; }
-    std::string out; char buf[512]; DWORD rd;
-    while (ReadFile(hRead, buf, sizeof(buf)-1, &rd, nullptr) && rd) { buf[rd]=0; out += buf; }
-    CloseHandle(hRead);
-    WaitForSingleObject(pi.hProcess, 30000);
-    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-    // trim whitespace
-    while (!out.empty() && (out.back()=='\n'||out.back()=='\r'||out.back()==' ')) out.pop_back();
-    if (out.empty()) return {};
-    int n = MultiByteToWideChar(CP_UTF8, 0, out.c_str(), -1, nullptr, 0);
-    std::wstring w(n-1, 0);
-    MultiByteToWideChar(CP_UTF8, 0, out.c_str(), -1, w.data(), n);
-    return w;
-}
-
-void SettingsPanel::DoWebLogin() {
+void SettingsPanel::DoTokenLogin() {
     if (m_selAcct < 0 || m_selAcct >= (int)m_cfg->accounts.size()) {
         MessageBoxW(m_hwnd, T(L"Select an account slot first."), T(L"Login"), MB_OK | MB_ICONWARNING);
         return;
     }
 
+    std::wstring userId  = GetText(m_hUserId);
+    std::wstring token   = GetText(m_hToken);
     std::wstring country = GetText(m_hCountry);
     std::wstring email   = GetText(m_hEmail);
 
-    // Step 1: fetch app_id from web player bundle
-    if (m_onLog) m_onLog(L"[Login] Fetching app credentials from Qobuz...");
-    std::wstring appId = RunStreamerCapture(L"fetch-app-id");
-    if (appId.empty()) {
-        MessageBoxW(m_hwnd, T(L"Could not fetch Qobuz app credentials.\nCheck your internet connection."),
-                    T(L"Login"), MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    // Step 2: open OAuth browser — user logs in, we intercept code_autorisation
-    LoginDialog dlg;
-    if (!dlg.Show(m_hwnd, m_hInst, appId)) return;  // cancelled or WebView2 unavailable
-
-    if (dlg.code.empty()) {
-        MessageBoxW(m_hwnd, T(L"Could not obtain authorization code from Qobuz.\nTry logging in again."),
+    if (userId.empty() || token.empty()) {
+        MessageBoxW(m_hwnd, T(L"Enter both User ID and Token.\nUse the browser userscript to copy them."),
                     T(L"Login"), MB_OK | MB_ICONWARNING);
         return;
     }
 
-    if (m_onLog) m_onLog(L"[Login] Authorization code obtained. Exchanging for credentials...");
+    if (m_onLog) m_onLog(L"[Login] Saving credentials...");
 
-    // Step 3: exchange code via streamer.exe oauth-login
-    std::wstring cmd = L"streamer.exe oauth-login"
-        L" --code \""    + EscapeArg(dlg.code) + L"\""
-        L" --country \"" + EscapeArg(country)  + L"\""
-        L" --email \""   + EscapeArg(email)     + L"\"";
+    std::wstring cmd = L"streamer.exe login"
+        L" --user-id \"" + EscapeArg(userId)  + L"\""
+        L" --token \""   + EscapeArg(token)   + L"\""
+        L" --country \"" + EscapeArg(country) + L"\"";
 
     SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
     HANDLE hRead, hWrite;
@@ -405,22 +370,26 @@ void SettingsPanel::DoWebLogin() {
     if (!partial.empty() && m_onLog) m_onLog(W2W(partial));
     CloseHandle(hRead);
 
-    WaitForSingleObject(pi.hProcess, 60000);
+    WaitForSingleObject(pi.hProcess, 30000);
     DWORD exitCode = 1; GetExitCodeProcess(pi.hProcess, &exitCode);
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
 
     if (exitCode == 0) {
         if (m_onLog) m_onLog(L"[Login] Success.");
+        // Persist email locally (not saved by streamer login, but useful for display)
+        auto& acct = m_cfg->accounts[m_selAcct];
+        acct.email = W2A(email);
         *m_cfg = Config::Load();
         RefreshAccountList();
         if (m_selAcct < (int)m_cfg->accounts.size()) {
             ListView_SetItemState(m_hAcctList, m_selAcct, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
             LoadAccountFields(m_selAcct);
         }
+        SetWindowTextW(m_hToken, L"");  // clear token field after save
         MessageBoxW(m_hwnd, T(L"Login successful."), T(L"Login"), MB_OK | MB_ICONINFORMATION);
     } else {
         if (m_onLog) m_onLog(L"[Login] Failed (exit " + std::to_wstring(exitCode) + L"). Check Downloads tab.");
-        MessageBoxW(m_hwnd, T(L"Login failed. Check Downloads tab for details."), T(L"Login"), MB_OK | MB_ICONERROR);
+        MessageBoxW(m_hwnd, T(L"Login failed. Check the token and try again."), T(L"Login"), MB_OK | MB_ICONERROR);
     }
 }
 

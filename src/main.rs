@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use qobuz_api::api::{auth, requests::set_requests_per_minute, service::QobuzApiService};
-use qobuz_api::credentials::web::{extract_from_web_player, extract_from_web_player_full};
+use qobuz_api::api::{requests::set_requests_per_minute, service::QobuzApiService};
+use qobuz_api::credentials::web::extract_from_web_player;
 use tracing::error;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -65,35 +65,15 @@ enum Command {
         /// Max results per type  [default: 20]
         #[arg(short = 'n', long, default_value = "20")]
         limit: u32,
+        /// Minimum duration filter: 10m, 1h30m, 90 (seconds), 1:30:00
+        #[arg(long)]
+        min_duration: Option<String>,
+        /// Maximum duration filter: 10m, 1h30m, 90 (seconds), 1:30:00
+        #[arg(long)]
+        max_duration: Option<String>,
         /// Account index to use (0-based)  [default: 0]
         #[arg(long, default_value_t = 0)]
         account: usize,
-    },
-    /// Save credentials obtained from the browser (WebView2 login flow); fetches app_secret automatically
-    TokenLogin {
-        #[arg(long)] user_id: String,
-        #[arg(long)] token:   String,
-        #[arg(long)] app_id:  String,
-        #[arg(long, default_value = "")] country: String,
-        #[arg(long, default_value = "")] email:   String,
-    },
-    /// Authenticate with Qobuz via email+password; auto-fetches app credentials from web player
-    WebLogin {
-        #[arg(long)]
-        email: String,
-        #[arg(long)]
-        password: String,
-        /// Country code to associate with this account (e.g. US, CN).
-        #[arg(long, default_value = "")]
-        country: String,
-    },
-    /// Print app_id from the Qobuz web player bundle (used by the GUI before showing the login dialog)
-    FetchAppId,
-    /// Complete OAuth login: exchange authorization code for credentials and save to config
-    OauthLogin {
-        #[arg(long)] code:    String,
-        #[arg(long, default_value = "")] country: String,
-        #[arg(long, default_value = "")] email:   String,
     },
     /// Manage configuration
     Config {
@@ -158,16 +138,18 @@ fn run() -> Result<(), AppError> {
 
     match cli.command {
         Command::Login { user_id, token, country } => {
-            // Find existing account by country or add new one
-            let slot = if country.is_empty() {
-                cfg.accounts.first_mut()
-            } else {
-                cfg.accounts.iter_mut().find(|a| a.country.eq_ignore_ascii_case(&country))
-            };
+            // Match existing slot: by user_id first, then by country, else add new
+            let slot_idx = cfg.accounts.iter().position(|a| a.user_id == user_id)
+                .or_else(|| if country.is_empty() { None } else {
+                    cfg.accounts.iter().position(|a| a.country.eq_ignore_ascii_case(&country))
+                });
 
-            if let Some(acct) = slot {
-                acct.user_id    = user_id.clone();
-                acct.auth_token = token.clone();
+            if let Some(idx) = slot_idx {
+                cfg.accounts[idx].user_id    = user_id.clone();
+                cfg.accounts[idx].auth_token = token.clone();
+                if !country.is_empty() {
+                    cfg.accounts[idx].country = country;
+                }
             } else {
                 cfg.accounts.push(Account {
                     country,
@@ -176,14 +158,41 @@ fn run() -> Result<(), AppError> {
                     ..Account::default()
                 });
             }
+            // Auto-fetch app credentials if not already set for this account
+            let has_app_id = cfg.accounts.iter()
+                .find(|a| a.user_id == user_id)
+                .map(|a| !a.app_id.is_empty())
+                .unwrap_or(false);
+            if !has_app_id {
+                let rt = tokio::runtime::Runtime::new()?;
+                match rt.block_on(extract_from_web_player()) {
+                    Ok((app_id, app_secret)) => {
+                        if let Some(acct) = cfg.accounts.iter_mut().find(|a| a.user_id == user_id) {
+                            acct.app_id     = app_id;
+                            acct.app_secret = app_secret;
+                        }
+                    }
+                    Err(e) => eprintln!("Warning: could not fetch app credentials: {e}"),
+                }
+            }
             config::save(&cfg)?;
 
-            // Verify credentials with the updated account
+            // Verify credentials only when app_id is available
             let acct = cfg.accounts.iter()
                 .find(|a| a.user_id == user_id)
                 .ok_or_else(|| AppError::Other("Account not found after save".into()))?;
-            let mut api = build_api(acct)?;
-            api.login_with_token(&user_id, &token)?;
+            if !acct.app_id.is_empty() {
+                let mut api = build_api(acct)?;
+                let country_code = api.login_with_token(&user_id, &token)?;
+                // Auto-set country from API response if the user didn't specify one
+                if !country_code.is_empty() {
+                    if let Some(acct) = cfg.accounts.iter_mut().find(|a| a.user_id == user_id) {
+                        acct.country = country_code.clone();
+                    }
+                    config::save(&cfg)?;
+                    println!("Country: {country_code}");
+                }
+            }
             println!("{}", t("login_success"));
         }
 
@@ -213,112 +222,16 @@ fn run() -> Result<(), AppError> {
             download::run(&mut api, target, &quality, &output_dir, cfg.settings.concurrency, country_ref)?;
         }
 
-        Command::Search { query, r#type, tsv, limit, account } => {
+        Command::Search { query, r#type, tsv, limit, min_duration, max_duration, account } => {
+            let min_secs = min_duration.as_deref().map(search::parse_duration)
+                .transpose().map_err(AppError::Other)?;
+            let max_secs = max_duration.as_deref().map(search::parse_duration)
+                .transpose().map_err(AppError::Other)?;
             let acct = cfg.accounts.get(account)
                 .ok_or_else(|| AppError::Other(format!("No account at index {account}")))?
                 .clone();
             let mut api = build_authenticated_api(&acct)?;
-            search::run(&mut api, &query, &r#type, tsv, limit)?;
-        }
-
-        Command::TokenLogin { user_id, token, app_id, country, email } => {
-            // Fetch app_secret from web player (app_id is already known from browser JS)
-            println!("{}", t("fetching_app_secret"));
-            let rt = tokio::runtime::Runtime::new()?;
-            let (_fetched_app_id, app_secret) = rt.block_on(extract_from_web_player())
-                .unwrap_or_else(|_| (String::new(), String::new()));
-
-            let slot = if country.is_empty() {
-                cfg.accounts.first_mut()
-            } else {
-                cfg.accounts.iter_mut().find(|a| a.country.eq_ignore_ascii_case(&country))
-            };
-
-            if let Some(acct) = slot {
-                acct.email      = email;
-                acct.app_id     = app_id;
-                acct.app_secret = app_secret;
-                acct.user_id    = user_id;
-                acct.auth_token = token;
-            } else {
-                cfg.accounts.push(Account {
-                    country, email, app_id, app_secret, user_id, auth_token: token,
-                    ..Account::default()
-                });
-            }
-            config::save(&cfg)?;
-            println!("{}", t("ok"));
-        }
-
-        Command::WebLogin { email, password, country } => {
-            println!("{}", t("fetching_credentials"));
-            let (app_id, app_secret, auth_token, user_id_i64) =
-                auth::web_login(&email, &password)?;
-            let user_id = user_id_i64.to_string();
-            println!("{} {email} (user_id={user_id})", t("authenticated"));
-
-            let slot = if country.is_empty() {
-                cfg.accounts.first_mut()
-            } else {
-                cfg.accounts.iter_mut().find(|a| a.country.eq_ignore_ascii_case(&country))
-            };
-
-            if let Some(acct) = slot {
-                acct.email      = email;
-                acct.app_id     = app_id;
-                acct.app_secret = app_secret;
-                acct.user_id    = user_id;
-                acct.auth_token = auth_token;
-            } else {
-                cfg.accounts.push(Account {
-                    country,
-                    email,
-                    app_id,
-                    app_secret,
-                    user_id,
-                    auth_token,
-                    ..Account::default()
-                });
-            }
-            config::save(&cfg)?;
-            println!("{}", t("config_saved"));
-        }
-
-        Command::FetchAppId => {
-            let rt = tokio::runtime::Runtime::new()?;
-            let (app_id, _, _) = rt.block_on(extract_from_web_player_full())
-                .map_err(|e| AppError::Other(format!("Failed to fetch app_id: {e}")))?;
-            println!("{app_id}");
-        }
-
-        Command::OauthLogin { code, country, email } => {
-            println!("{}", t("exchanging_oauth"));
-            let (app_id, app_secret, user_auth_token, user_id, api_country) = auth::oauth_login(&code)
-                .map_err(|e| AppError::Other(format!("OAuth login failed: {e}")))?;
-
-            // Use the country from the API if the user didn't specify one
-            let country = if country.is_empty() { api_country } else { country };
-
-            let slot = if country.is_empty() {
-                cfg.accounts.first_mut()
-            } else {
-                cfg.accounts.iter_mut().find(|a| a.country.eq_ignore_ascii_case(&country))
-            };
-
-            if let Some(acct) = slot {
-                acct.email      = email;
-                acct.app_id     = app_id;
-                acct.app_secret = app_secret;
-                acct.user_id    = user_id;
-                acct.auth_token = user_auth_token;
-            } else {
-                cfg.accounts.push(Account {
-                    country, email, app_id, app_secret, user_id, auth_token: user_auth_token,
-                    ..Account::default()
-                });
-            }
-            config::save(&cfg)?;
-            println!("{}", t("ok"));
+            search::run(&mut api, &query, &r#type, tsv, limit, min_secs, max_secs)?;
         }
 
         Command::History { tsv, limit, action } => match action {

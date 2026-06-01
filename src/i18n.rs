@@ -79,22 +79,6 @@ define_messages! {
         "Search the Qobuz catalog",
         "Buscar en el catálogo de Qobuz"
     ),
-    cmd_token_login => (
-        "Save credentials obtained from the browser (WebView2 login flow); fetches app_secret automatically",
-        "Guardar credenciales obtenidas del navegador (flujo WebView2); obtiene app_secret automáticamente"
-    ),
-    cmd_web_login => (
-        "Authenticate with Qobuz via email+password; auto-fetches app credentials from web player",
-        "Autenticar con Qobuz por email+contraseña; obtiene credenciales automáticamente del reproductor web"
-    ),
-    cmd_fetch_app_id => (
-        "Print app_id from the Qobuz web player bundle (used by the GUI before showing the login dialog)",
-        "Mostrar app_id del reproductor web de Qobuz (usado por la GUI antes de mostrar el diálogo de inicio de sesión)"
-    ),
-    cmd_oauth_login => (
-        "Complete OAuth login: exchange authorization code for credentials and save to config",
-        "Completar inicio de sesión OAuth: intercambiar código de autorización por credenciales y guardar en configuración"
-    ),
     cmd_config => (
         "Manage configuration",
         "Administrar configuración"
@@ -188,11 +172,8 @@ define_messages! {
 
     // ── Console output ──
     login_success => ("Login successful. Config saved.", "Inicio de sesión exitoso. Configuración guardada."),
-    fetching_app_secret => ("Fetching app secret from Qobuz web player...", "Obteniendo app secret del reproductor web de Qobuz..."),
     ok => ("ok", "ok"),
-    fetching_credentials => ("Fetching app credentials and authenticating...", "Obteniendo credenciales y autenticando..."),
     config_saved => ("Config saved.", "Configuración guardada."),
-    exchanging_oauth => ("Exchanging OAuth code for credentials...", "Intercambiando código OAuth por credenciales..."),
     no_history => ("No download history.", "No hay historial de descargas."),
     settings_saved => ("Settings saved.", "Configuración guardada."),
 
