@@ -26,10 +26,11 @@ struct QueryNode {
 
 struct SearchResult {
     std::wstring id, title, artist, album, type;
-    std::wstring genre, label;
+    std::wstring genre, label, country, date;
     int  year     = 0;
     int  duration = 0;
     bool hires    = false;
+    bool explicit_ = false;
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────

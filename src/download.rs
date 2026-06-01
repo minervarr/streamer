@@ -2,11 +2,11 @@ use std::{fs, path::Path};
 
 use qobuz_api::{
     api::service::QobuzApiService,
-    metadata::config::{MetadataConfig, MetadataField},
+    metadata::config::{MetadataConfig, MetadataField::CoverArt},
     models::album::Image,
 };
 
-use crate::{errors::AppError, extras, url::DownloadTarget};
+use crate::{errors::AppError, extras, history, i18n::t, url::DownloadTarget};
 
 pub fn quality_to_format_id(quality: &str) -> i32 {
     match quality {
@@ -17,9 +17,9 @@ pub fn quality_to_format_id(quality: &str) -> i32 {
     }
 }
 
-fn no_art_config() -> MetadataConfig {
-    let mut config = MetadataConfig::default();
-    config.set(MetadataField::CoverArt, false);
+fn full_meta_config() -> MetadataConfig {
+    let mut config = MetadataConfig::all();
+    config.set(CoverArt, false);
     config
 }
 
@@ -47,9 +47,9 @@ fn save_text(text: &str, path: &Path) {
         return;
     }
     if let Err(e) = fs::write(path, text) {
-        eprintln!("Warning: could not save {}: {e}", path.display());
+        eprintln!("{} {}: {e}", t("warning_could_not_save"), path.display());
     } else {
-        println!("Saved: {}", path.display());
+        println!("{} {}", t("saved"), path.display());
     }
 }
 
@@ -61,21 +61,21 @@ fn save_url(url: &str, dest: &Path, label: &str) {
         Ok(resp) => match resp.bytes() {
             Ok(bytes) => {
                 if let Err(e) = fs::write(dest, &bytes) {
-                    eprintln!("Warning: could not save {label}: {e}");
+                    eprintln!("{} {label}: {e}", t("warning_could_not_save"));
                 } else {
-                    println!("Saved: {}", dest.display());
+                    println!("{} {}", t("saved"), dest.display());
                 }
             }
-            Err(e) => eprintln!("Warning: could not read {label} bytes: {e}"),
+            Err(e) => eprintln!("{} {label}: {e}", t("warning_could_not_read")),
         },
-        Err(e) => eprintln!("Warning: could not download {label}: {e}"),
+        Err(e) => eprintln!("{} {label}: {e}", t("warning_could_not_download")),
     }
 }
 
 fn save_album_extras(api: &QobuzApiService, album_id: &str, album_dir: &Path) {
     match extras::fetch_album_extras(api, album_id) {
         Ok(ex) => {
-            if let Some(desc) = ex.description.as_deref() {
+            if let Some(desc) = ex.description.as_deref().filter(|d| !d.is_empty()) {
                 save_text(desc, &album_dir.join("album_description.txt"));
             }
             if let Some(url) = ex.goodies
@@ -88,7 +88,7 @@ fn save_album_extras(api: &QobuzApiService, album_id: &str, album_dir: &Path) {
                 save_url(&url, &album_dir.join("booklet.pdf"), "booklet");
             }
         }
-        Err(e) => eprintln!("Warning: could not fetch album extras: {e}"),
+        Err(e) => eprintln!("{} {e}", t("warning_album_extras")),
     }
 }
 
@@ -102,7 +102,17 @@ fn save_artist_extras(api: &QobuzApiService, artist_id: i32, artist_dir: &Path) 
                 save_url(url, &artist_dir.join("artist.jpg"), "artist image");
             }
         }
-        Err(e) => eprintln!("Warning: could not fetch artist extras: {e}"),
+        Err(e) => eprintln!("{} {e}", t("warning_artist_extras")),
+    }
+}
+
+fn quality_label(q: &str) -> &'static str {
+    match q {
+        "mp3" => t("quality_mp3"),
+        "flac" => t("quality_flac"),
+        "flac-hi" => t("quality_flac_hi"),
+        "flac-ultra" => t("quality_flac_ultra"),
+        _ => t("quality_flac"),
     }
 }
 
@@ -112,15 +122,22 @@ pub fn run(
     quality: &str,
     output_dir: &Path,
     concurrency: usize,
+    country: Option<&str>,
 ) -> Result<(), AppError> {
     let format_id = quality_to_format_id(quality);
-    let meta = no_art_config();
+    let meta = full_meta_config();
     let conc = Some(concurrency);
+    let ql = quality_label(quality);
 
     match target {
         DownloadTarget::Track(id) => {
-            println!("Downloading track {id}...");
             let track = api.get_track(id)?;
+            let title = track.title.as_deref().unwrap_or("?");
+            let artist = track.album.as_ref()
+                .and_then(|a| a.artist.as_ref())
+                .and_then(|a| a.name.as_deref())
+                .unwrap_or("?");
+            println!("\n  {} · {} — {} [{}]\n", t("downloading_track"), artist, title, ql);
             let path = api.download_track_cancellable(id, format_id, output_dir, Some(&meta), None)?;
             if let Some(url) = track
                 .album
@@ -131,18 +148,23 @@ pub fn run(
                 let dir = path.parent().unwrap_or(output_dir);
                 save_url(&url, &dir.join("cover.jpg"), "cover");
             }
-            println!("Saved: {}", path.display());
+            let _ = history::record(&id.to_string(), "track", Some(title), Some(artist), None, Some(1), quality, format_id, path.parent().and_then(|p| p.to_str()), country, true);
+            println!("  {} {}\n", t("saved"), path.display());
         }
         DownloadTarget::Album(ref id) => {
-            println!("Downloading album {id}...");
             let album = api.get_album(id, None)?;
-            let cover_url = album
-                .image
-                .as_ref()
-                .and_then(|img| best_cover_url(img));
+            let cover_url = album.image.as_ref().and_then(|img| best_cover_url(img));
             let artist_id = album.artist.as_ref().and_then(|a| a.id);
+            let artist_name = album.artist.as_ref().and_then(|a| a.name.as_deref()).map(String::from);
+            let album_title = album.title.clone();
+            let track_count = album.tracks_count;
+            let display_artist = artist_name.as_deref().unwrap_or("?");
+            let display_title = album_title.as_deref().unwrap_or("?");
+            let n_tracks = track_count.unwrap_or(0);
+            println!("\n  {} · {} — {} ({} {}, {})\n",
+                t("downloading_album"), display_artist, display_title, n_tracks, t("tracks_suffix"), ql);
             let paths = api.download_album_cancellable(id, format_id, output_dir, Some(&meta), conc, None)?;
-            println!("Downloaded {} track(s).", paths.len());
+            let success = !paths.is_empty();
             let album_dir = paths.first().and_then(|p| p.parent()).map(Path::to_owned);
             if let (Some(url), Some(dir)) = (cover_url, &album_dir) {
                 save_url(&url, &dir.join("cover.jpg"), "cover");
@@ -153,23 +175,37 @@ pub fn run(
                     save_artist_extras(api, aid, artist_dir);
                 }
             }
+            println!("\n  ✓ {} — {} · {} {} {}\n",
+                display_artist, display_title, t("downloaded_tracks"), paths.len(), t("tracks_suffix"));
+            let _ = history::record(id, "album", album_title.as_deref(), artist_name.as_deref(), artist_id.map(|i| i as i64), track_count, quality, format_id, album_dir.as_deref().and_then(|p| p.to_str()), country, success);
         }
         DownloadTarget::Artist(id) => {
-            println!("Downloading artist {id} (full discography)...");
+            let artist = api.get_artist(id, None)?;
+            let name = artist.name.as_deref().unwrap_or("?");
+            let n_albums = artist.albums_count.unwrap_or(0);
+            println!("\n  {} · {} ({}, ~{} {})\n",
+                t("downloading_artist"), name, t("full_discography"), n_albums, t("search_albums"));
             let paths = api.download_artist_cancellable(id, format_id, output_dir, Some(&meta), conc, None)?;
-            println!("Downloaded {} track(s).", paths.len());
-            let artist_dir = paths
-                .first()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent());
+            let success = !paths.is_empty();
+            let artist_dir = paths.first().and_then(|p| p.parent()).and_then(|p| p.parent());
             if let Some(dir) = artist_dir {
                 save_artist_extras(api, id, dir);
             }
+            println!("\n  ✓ {} · {} {} {}\n",
+                name, t("downloaded_tracks"), paths.len(), t("tracks_suffix"));
+            let _ = history::record(&id.to_string(), "artist", None, Some(name), Some(id as i64), Some(paths.len() as i32), quality, format_id, artist_dir.and_then(|p| p.to_str()), country, success);
         }
         DownloadTarget::Playlist(ref id) => {
-            println!("Downloading playlist {id}...");
+            let playlist = api.get_playlist(id, None)?;
+            let name = playlist.name.as_deref().unwrap_or("?");
+            let n_tracks = playlist.tracks_count.unwrap_or(0);
+            println!("\n  {} · {} ({} {}, {})\n",
+                t("downloading_playlist"), name, n_tracks, t("tracks_suffix"), ql);
             let paths = api.download_playlist_cancellable(id, format_id, output_dir, Some(&meta), conc, None)?;
-            println!("Downloaded {} track(s).", paths.len());
+            let success = !paths.is_empty();
+            println!("\n  ✓ {} · {} {} {}\n",
+                name, t("downloaded_tracks"), paths.len(), t("tracks_suffix"));
+            let _ = history::record(id, "playlist", Some(name), None, None, Some(paths.len() as i32), quality, format_id, Some(&output_dir.to_string_lossy()), country, success);
         }
     }
 

@@ -1,3 +1,3 @@
-[submodule "qobuz-api"]
-	path = qobuz-api
+[submodule "kobuzapi"]
+	path = kobuzapi
 	url = https://github.com/minervarr/kobuzapi.git

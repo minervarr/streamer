@@ -1,0 +1,416 @@
+% Compile with: lualatex manual.tex
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{fontspec}
+\setmainfont{Segoe UI}
+\setmonofont{Consolas}
+
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\usepackage{xcolor}
+\definecolor{accent}{HTML}{1E88E5}
+\definecolor{bg}{HTML}{F5F5F5}
+\definecolor{darkbg}{HTML}{2D2D2D}
+\definecolor{green}{HTML}{43A047}
+\definecolor{red}{HTML}{E53935}
+
+\usepackage{tcolorbox}
+\tcbuselibrary{listings,skins}
+
+\newtcolorbox{tipbox}{
+  colback=accent!8, colframe=accent!60,
+  fonttitle=\bfseries, title=Tip,
+  left=4pt, right=4pt, top=2pt, bottom=2pt
+}
+
+\newtcolorbox{warnbox}{
+  colback=red!8, colframe=red!60,
+  fonttitle=\bfseries, title=Important,
+  left=4pt, right=4pt, top=2pt, bottom=2pt
+}
+
+\newtcolorbox{cmdbox}{
+  colback=darkbg, colframe=darkbg,
+  colupper=white, fontupper=\ttfamily\small,
+  left=6pt, right=6pt, top=4pt, bottom=4pt,
+  sharp corners
+}
+
+\usepackage{enumitem}
+\setlist[enumerate]{itemsep=2pt}
+\setlist[itemize]{itemsep=2pt}
+
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=accent, urlcolor=accent}
+
+\usepackage{titlesec}
+\titleformat{\section}{\Large\bfseries\color{accent}}{}{0pt}{}
+\titleformat{\subsection}{\large\bfseries}{}{0pt}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{}{0pt}{}
+
+\pagestyle{plain}
+
+\begin{document}
+
+\begin{center}
+{\fontsize{28}{34}\selectfont\bfseries\color{accent} Streamer}\\[6pt]
+{\large Qobuz Music Downloader --- User Manual}\\[4pt]
+{\small Version 0.1 --- May 2026}
+\end{center}
+
+\vspace{1em}
+\tableofcontents
+\vspace{1em}
+
+%=============================================================================
+\section{What is Streamer?}
+%=============================================================================
+
+Streamer downloads music from Qobuz in the quality you choose --- from MP3 all
+the way up to 24-bit/192\,kHz Hi-Res FLAC.  It comes in two flavors:
+
+\begin{itemize}
+  \item \textbf{GUI} (graphical app) --- search, browse, and download with
+        clicks.  Requires Windows~10+ with Microsoft Edge installed.
+  \item \textbf{CLI} (command line) --- scriptable, fast, works in terminals.
+\end{itemize}
+
+Both read the same config file, so credentials set up in one work in the other.
+
+%=============================================================================
+\section{First-Time Setup}
+%=============================================================================
+
+\subsection{Step 1 --- Open the App}
+
+Double-click \texttt{streamer-gui.exe}. The window has three tabs at the top:
+\textbf{Search}, \textbf{Downloads}, and \textbf{Settings}.  Go to
+\textbf{Settings} first.
+
+\subsection{Step 2 --- Create an Account Slot}
+
+Click \textbf{+ Add}.  A new empty row appears in the account list on the left.
+Click it to select it.
+
+\subsection{Step 3 --- Log In}
+
+\begin{enumerate}
+  \item Type your \textbf{email} in the Email field (optional, just for display).
+  \item Click \textbf{Login with Qobuz}.
+  \item A browser window opens inside the app showing the Qobuz login page.
+  \item Log in with your Qobuz account (email/password, Google, Apple, etc.).
+  \item The browser closes automatically once login succeeds.
+  \item You see \emph{``Login successful.''} --- done!
+\end{enumerate}
+
+\begin{tipbox}
+The country code (US, FR, etc.) is detected automatically from your account.
+You do not need to type it.
+\end{tipbox}
+
+\subsection{Step 4 --- Set Your Download Folder}
+
+Still in Settings:
+\begin{enumerate}
+  \item Click \textbf{Browse...} next to the Download Dir field.
+  \item Pick the folder where you want your music saved.
+  \item Click \textbf{Save Settings}.
+\end{enumerate}
+
+\subsection{Step 5 --- Pick a Quality}
+
+Scroll the Quality wheel to your preferred level:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Level} & \textbf{Format} & \textbf{Typical size (per album)} \\
+\midrule
+mp3        & 320\,kbps MP3        & $\sim$100\,MB \\
+flac       & 16-bit / 44.1\,kHz   & $\sim$300\,MB \\
+flac-hi    & 24-bit / 96\,kHz     & $\sim$1\,GB \\
+flac-ultra & 24-bit / 192\,kHz    & $\sim$2\,GB \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Click \textbf{Save Settings} when done.
+
+%=============================================================================
+\section{Searching for Music}
+%=============================================================================
+
+Go to the \textbf{Search} tab.
+
+\subsection{Basic Search}
+
+Type what you want and press \textbf{Enter}:
+
+\begin{cmdbox}
+daft punk
+\end{cmdbox}
+
+Results appear in a table.  Each row shows: Title, Artist, Label, Date,
+Duration, Genre, Hi-Res, Explicit, Type, and Country.
+
+\subsection{Filters}
+
+You can narrow results by adding \texttt{field:value} filters.
+Use quotes around multi-word values.
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}lXl@{}}
+\toprule
+\textbf{Filter} & \textbf{What it does} & \textbf{Example} \\
+\midrule
+\texttt{artist:"..."}  & Match artist name     & \texttt{artist:"Taylor Swift"} \\
+\texttt{title:"..."}   & Match title           & \texttt{title:"Anti-Hero"} \\
+\texttt{genre:...}     & Match genre           & \texttt{genre:jazz} \\
+\texttt{label:...}     & Match record label    & \texttt{label:republic} \\
+\texttt{type:...}      & Content type          & \texttt{type:album} \\
+\texttt{country:...}   & Account country       & \texttt{country:US} \\
+\texttt{year:...}      & Release year          & \texttt{year:2024} \\
+\texttt{year:...-...}  & Year range            & \texttt{year:2020-2024} \\
+\texttt{hires:true}    & Hi-Res only           & \texttt{hires:true} \\
+\texttt{explicit:true} & Explicit only         & \texttt{explicit:true} \\
+\texttt{explicit:false} & Clean versions only  & \texttt{explicit:false} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Combining Filters}
+
+Filters are combined with \textbf{AND} by default (just put them next to each
+other).  You can also use \textbf{OR}, \textbf{NOT}, and parentheses:
+
+\begin{cmdbox}
+"the life of a showgirl" artist:"taylor swift" explicit:true NOT type:playlist
+\end{cmdbox}
+
+This means: search for ``the life of a showgirl'', only from Taylor Swift, only
+explicit versions, and exclude playlists.
+
+More examples:
+
+\begin{cmdbox}
+artist:"Pink Floyd" year:1970-1980 hires:true
+\end{cmdbox}
+
+\begin{cmdbox}
+(artist:"Daft Punk" OR artist:"Justice") type:album
+\end{cmdbox}
+
+\begin{cmdbox}
+genre:classical NOT explicit:true
+\end{cmdbox}
+
+\subsection{Understanding the Results}
+
+Results are \textbf{grouped by artist} and sorted newest-first within each
+group.  The columns tell you:
+
+\begin{itemize}
+  \item \textbf{Title} --- includes the version in parentheses if available,
+        e.g.\ \emph{Midnights (Deluxe)} vs.\ \emph{Midnights}.
+  \item \textbf{Label} --- the record label (helps distinguish pressings).
+  \item \textbf{Date} --- full release date, not just the year.
+  \item \textbf{E} --- shows \textbf{E} for explicit content.
+  \item \textbf{Hi-Res} --- shows \textbf{Yes} if hi-res audio is available.
+  \item \textbf{Country} --- which of your accounts found this result.
+\end{itemize}
+
+%=============================================================================
+\section{Downloading}
+%=============================================================================
+
+\subsection{From Search Results}
+
+\begin{enumerate}
+  \item Click a row in the search results.
+  \item Click \textbf{Download Selected} (or right-click and choose Download).
+  \item Switch to the \textbf{Downloads} tab to watch progress.
+\end{enumerate}
+
+\subsection{From a URL}
+
+Paste a Qobuz link into the \textbf{URL bar} at the top and press
+\textbf{Enter}:
+
+\begin{cmdbox}
+https://www.qobuz.com/us-en/album/random-access-memories/abcdef123
+\end{cmdbox}
+
+\subsection{What Gets Downloaded}
+
+For each album, Streamer creates:
+
+\begin{cmdbox}
+Music/
+  Artist Name/
+    Album Title/
+      01.flac
+      02.flac
+      ...
+      cover.jpg
+      album\_description.txt   (if available)
+      booklet.pdf              (if available)
+    artist\_bio.txt             (if available)
+    artist.jpg                 (if available)
+\end{cmdbox}
+
+If you have multiple accounts with different countries, a country subfolder
+is added: \texttt{Music/US/Artist/Album/...}
+
+\subsection{Downloads Tab}
+
+The Downloads tab shows:
+\begin{itemize}
+  \item A \textbf{list} of all queued/active/completed downloads with status
+        and progress percentage.
+  \item A \textbf{log area} at the bottom with detailed messages (useful if
+        something goes wrong).
+  \item A \textbf{Cancel Selected} button to stop a running download.
+\end{itemize}
+
+%=============================================================================
+\section{Keyboard Shortcuts}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Shortcut} & \textbf{Action} \\
+\midrule
+Enter              & Search (in search box) or Download (in URL bar) \\
+Ctrl+A             & Select all text in the current field \\
+Ctrl+Backspace     & Delete previous word \\
+Ctrl+Delete        & Delete next word \\
+Tab                & Move to next field \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%=============================================================================
+\section{Multiple Accounts}
+%=============================================================================
+
+You can add several Qobuz accounts (e.g.\ one US, one FR) to access
+region-specific catalogs.
+
+\begin{enumerate}
+  \item Go to \textbf{Settings} and click \textbf{+ Add} for each account.
+  \item Log in to each one.
+  \item When you search, results from \emph{all} accounts are merged.
+        The \textbf{Country} column tells you which account found each result.
+  \item Downloads automatically use the correct account.
+\end{enumerate}
+
+You can export/import your accounts with the \textbf{Export Accounts} and
+\textbf{Import Accounts} buttons (saves as JSON, useful for backup).
+
+%=============================================================================
+\section{Command Line Usage}
+%=============================================================================
+
+For advanced users or scripting, \texttt{streamer.exe} can be used directly in
+a terminal.
+
+\subsection{Login}
+
+\begin{cmdbox}
+streamer.exe web-login --email you@example.com --password secret
+\end{cmdbox}
+
+\subsection{Download an Album}
+
+\begin{cmdbox}
+streamer.exe download "https://www.qobuz.com/us-en/album/..." --quality flac-hi
+\end{cmdbox}
+
+Or with a bare ID:
+
+\begin{cmdbox}
+streamer.exe download abc123def --quality flac
+\end{cmdbox}
+
+\subsection{Search}
+
+\begin{cmdbox}
+streamer.exe search "pink floyd" --type albums -n 50
+\end{cmdbox}
+
+Add \texttt{-{}-tsv} for machine-readable output (tab-separated).
+
+\subsection{Change Settings}
+
+\begin{cmdbox}
+streamer.exe config set-dir "D:\textbackslash{}Music"
+streamer.exe config set-quality flac-ultra
+streamer.exe config show
+\end{cmdbox}
+
+%=============================================================================
+\section{Configuration File}
+%=============================================================================
+
+Location: \texttt{\%APPDATA\%\textbackslash streamer\textbackslash config.toml}
+
+You normally don't need to edit it by hand (the GUI and CLI manage it), but
+it looks like this:
+
+\begin{cmdbox}
+{[[}accounts{]]}\\
+country = "US"\\
+email = "you@example.com"\\
+app\_id = "..."\\
+app\_secret = "..."\\
+user\_id = "12345"\\
+auth\_token = "..."\\[6pt]
+{[}settings{]}\\
+download\_dir = "C:/Users/You/Music"\\
+quality = "flac"\\
+concurrency = 4\\
+requests\_per\_minute = 0
+\end{cmdbox}
+
+%=============================================================================
+\section{Troubleshooting}
+%=============================================================================
+
+\begin{description}[style=nextline]
+  \item[Login dialog opens but nothing loads]
+    Make sure Microsoft Edge is installed.  The login dialog uses Edge's
+    WebView2 engine.
+
+  \item[Download fails with ``os error 123'']
+    The download directory path is invalid.  Go to Settings, click Browse,
+    pick a valid folder, and Save Settings.
+
+  \item[App crashes on login]
+    Check the log file at
+    \texttt{\%APPDATA\%\textbackslash streamer\textbackslash streamer-gui.log}
+    --- it records what happened right before the crash.
+
+  \item[Search returns no results]
+    Check that at least one account is logged in (Settings tab should show
+    ``Authenticated'').
+
+  \item[Linker error ``cannot open file streamer-gui.exe'']
+    The app is still running. Close it first, then rebuild.
+
+  \item[Garbled characters in file names]
+    Make sure you built the GUI with the \texttt{/utf-8} compiler flag
+    (already set in CMakeLists.txt).
+\end{description}
+
+\vfill
+\begin{center}
+\small\color{gray}
+Streamer is not affiliated with Qobuz.\\
+A valid Qobuz subscription is required to download music.
+\end{center}
+
+\end{document}

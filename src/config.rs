@@ -4,11 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::AppError;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct Credentials {
-    pub app_id: String,
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct Account {
+    pub country:    String,
+    #[serde(default)]
+    pub email:      String,
+    pub app_id:     String,
     pub app_secret: String,
-    pub user_id: String,
+    pub user_id:    String,
     pub auth_token: String,
 }
 
@@ -22,15 +25,13 @@ pub struct Settings {
     /// Max concurrent track downloads. Higher = faster on good connections.
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
+    /// UI language: "en" | "es". Auto-detected from OS if omitted.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
-fn default_requests_per_minute() -> u32 {
-    0
-}
-
-fn default_concurrency() -> usize {
-    4
-}
+fn default_requests_per_minute() -> u32 { 0 }
+fn default_concurrency() -> usize { 4 }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -41,14 +42,15 @@ impl Default for Settings {
             quality: "flac".to_string(),
             requests_per_minute: default_requests_per_minute(),
             concurrency: default_concurrency(),
+            language: None,
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
-    #[serde(default)]
-    pub credentials: Credentials,
+    #[serde(default, rename = "accounts")]
+    pub accounts: Vec<Account>,
     #[serde(default)]
     pub settings: Settings,
 }
@@ -66,7 +68,13 @@ pub fn load() -> Result<Config, AppError> {
         return Ok(Config::default());
     }
     let text = fs::read_to_string(&path)?;
-    Ok(toml::from_str(&text)?)
+    let mut cfg: Config = toml::from_str(&text)?;
+
+    let dir = cfg.settings.download_dir.to_string_lossy();
+    let dir = dir.trim_matches('\'').trim_matches('"');
+    cfg.settings.download_dir = PathBuf::from(dir);
+
+    Ok(cfg)
 }
 
 pub fn save(config: &Config) -> Result<(), AppError> {

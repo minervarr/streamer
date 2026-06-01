@@ -4,3 +4,11 @@ target/
 Cargo.lock
 thirdPartyKnowledge/
 streamer-gui/build/
+streamer-gui/qbz/
+streamer-gui/vendor/
+
+# LaTeX build artifacts
+doc/*.aux
+doc/*.log
+doc/*.out
+doc/*.toc

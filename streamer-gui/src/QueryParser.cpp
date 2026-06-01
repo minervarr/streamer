@@ -3,6 +3,43 @@
 #include <sstream>
 #include <stdexcept>
 
+// ── Field / value normalization (ES → EN) ────────────────────────────────────
+
+static std::wstring NormalizeField(const std::wstring& f) {
+    if (f == L"artista")                         return L"artist";
+    if (f == L"titulo" || f == L"título")        return L"title";
+    if (f == L"album"  || f == L"álbum")         return L"album";
+    if (f == L"genero" || f == L"género")        return L"genre";
+    if (f == L"sello")                           return L"label";
+    if (f == L"tipo")                            return L"type";
+    if (f == L"pais"   || f == L"país")          return L"country";
+    if (f == L"año"    || f == L"anio")          return L"year";
+    if (f == L"duracion" || f == L"duración")    return L"duration";
+    if (f == L"alta_res" || f == L"altares")     return L"hires";
+    if (f == L"explicito" || f == L"explícito"
+        || f == L"explicita" || f == L"explícita") return L"explicit";
+    return f;
+}
+
+static std::wstring NormalizeBool(const std::wstring& v) {
+    std::wstring l = v;
+    for (auto& c : l) c = (wchar_t)std::towlower(c);
+    if (l == L"verdadero" || l == L"sí" || l == L"si" || l == L"verdad") return L"true";
+    if (l == L"falso" || l == L"no")  return L"false";
+    return l;
+}
+
+static std::wstring NormalizeType(const std::wstring& v) {
+    std::wstring l = v;
+    for (auto& c : l) c = (wchar_t)std::towlower(c);
+    if (l == L"álbum"  || l == L"album"  || l == L"álbumes" || l == L"albumes") return L"album";
+    if (l == L"pista"  || l == L"pistas")  return L"track";
+    if (l == L"artista"|| l == L"artistas") return L"artist";
+    if (l == L"lista"  || l == L"listas" || l == L"playlist") return L"playlist";
+    if (l == L"todos"  || l == L"todo")    return L"all";
+    return l;
+}
+
 // ── Tokenizer ─────────────────────────────────────────────────────────────────
 
 enum class TokKind { Word, Quoted, Colon, Gt, Lt, Gte, Lte, Dash,
@@ -19,7 +56,10 @@ static std::wstring ToLower(std::wstring s) {
 }
 
 static bool IsIdChar(wchar_t c) {
-    return std::iswalnum(c) || c == L'_' || c == L'.' || c == L'/';
+    return std::iswalnum(c) || c == L'_' || c == L'.' || c == L'/' || c == L'á'
+        || c == L'é' || c == L'í' || c == L'ó' || c == L'ú' || c == L'ñ'
+        || c == L'Á' || c == L'É' || c == L'Í' || c == L'Ó' || c == L'Ú' || c == L'Ñ'
+        || c == L'ü' || c == L'Ü';
 }
 
 static std::vector<Token> Tokenize(const std::wstring& input) {
@@ -69,10 +109,10 @@ static std::vector<Token> Tokenize(const std::wstring& input) {
             std::wstring w;
             while (i < n && IsIdChar(input[i])) w += input[i++];
             std::wstring wl = ToLower(w);
-            if (wl == L"and") toks.push_back({TokKind::And, w});
-            else if (wl == L"or")  toks.push_back({TokKind::Or,  w});
-            else if (wl == L"not") toks.push_back({TokKind::Not, w});
-            else                   toks.push_back({TokKind::Word, w});
+            if (wl == L"and" || wl == L"y") toks.push_back({TokKind::And, w});
+            else if (wl == L"or" || wl == L"o")  toks.push_back({TokKind::Or,  w});
+            else if (wl == L"not")               toks.push_back({TokKind::Not, w});
+            else                                  toks.push_back({TokKind::Word, w});
             continue;
         }
 
@@ -165,7 +205,7 @@ struct Parser {
 
         // filter: WORD COLON ...
         if (at(TokKind::Word) && pos + 1 < toks.size() && toks[pos+1].kind == TokKind::Colon) {
-            std::wstring field = ToLower(consume().val);
+            std::wstring field = NormalizeField(ToLower(consume().val));
             consume(); // colon
 
             auto n = std::make_unique<QueryNode>();
@@ -242,11 +282,18 @@ static bool MatchFilter(const FilterNode& f, const SearchResult& r) {
     if (field == L"album")  return ContainsI(r.album,  f.value);
     if (field == L"genre")  return ContainsI(r.genre,  f.value);
     if (field == L"label")  return ContainsI(r.label,  f.value);
-    if (field == L"type")   return ContainsI(r.type,   f.value);
+    if (field == L"type")    return ContainsI(r.type,    NormalizeType(f.value));
+    if (field == L"country") return ContainsI(r.country, f.value);
 
     if (field == L"hires") {
-        bool want = (ToLower(f.value) == L"true" || f.value == L"1");
+        std::wstring v = NormalizeBool(f.value);
+        bool want = (v == L"true" || v == L"1");
         return r.hires == want;
+    }
+    if (field == L"explicit") {
+        std::wstring v = NormalizeBool(f.value);
+        bool want = (v == L"true" || v == L"1");
+        return r.explicit_ == want;
     }
 
     // Numeric fields: year, duration
@@ -298,12 +345,12 @@ static void CollectTerms(const QueryNode& node, std::vector<std::wstring>& out) 
     case NodeKind::Term:
         if (!node.term.empty()) out.push_back(node.term);
         break;
-    case NodeKind::Filter:
-        // use artist/title values as search terms; skip numeric/type filters
-        if (node.filter.field == L"artist" || node.filter.field == L"title" ||
-            node.filter.field == L"album")
+    case NodeKind::Filter: {
+        const auto& f = node.filter.field;
+        if (f == L"artist" || f == L"title" || f == L"album")
             if (!node.filter.value.empty()) out.push_back(node.filter.value);
         break;
+    }
     case NodeKind::And:
     case NodeKind::Or:
         if (node.left)  CollectTerms(*node.left,  out);
@@ -328,7 +375,7 @@ std::wstring ExtractBaseTerm(const QueryNode& node) {
 
 static void CollectTypeHints(const QueryNode& node, std::vector<std::wstring>& out) {
     if (node.kind == NodeKind::Filter && node.filter.field == L"type") {
-        out.push_back(node.filter.value);
+        out.push_back(NormalizeType(node.filter.value));
         return;
     }
     if (node.left)  CollectTypeHints(*node.left,  out);

@@ -5,6 +5,8 @@
 #include "SearchPanel.h"
 #include "DownloadsPanel.h"
 #include "Theme.h"
+#include "Log.h"
+#include "Strings.h"
 
 static std::wstring GetText(HWND hwnd) {
     int len = GetWindowTextLengthW(hwnd);
@@ -71,16 +73,6 @@ LRESULT MainWindow::HandleMsg(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == VK_RETURN && GetFocus() == m_hUrl) { OnUrlGo(); return 0; }
         break;
 
-    case WM_TASK_PROGRESS:
-        if (m_downloads) m_downloads->OnProgress((int)wp, (int)lp);
-        return 0;
-    case WM_TASK_DONE: {
-        auto* msg2 = reinterpret_cast<std::wstring*>(lp);
-        if (m_downloads) m_downloads->OnDone((int)wp, msg2 == nullptr, msg2 ? *msg2 : L"");
-        delete msg2;
-        return 0;
-    }
-
     case WM_SYSCOLORCHANGE:
         // System colors changed (theme switch) — repaint tab bar
         InvalidateRect(m_hwnd, nullptr, FALSE);
@@ -132,9 +124,9 @@ void MainWindow::OnCreate() {
         0, 0, 0, 0, m_hwnd, (HMENU)(INT_PTR)ID_URL_BAR, m_hInst, nullptr);
     SendMessage(m_hUrl, WM_SETFONT, (WPARAM)hf, TRUE);
     SendMessageW(m_hUrl, EM_SETCUEBANNER, TRUE,
-        (LPARAM)L"Paste a Qobuz URL and press Go to download directly");
+        (LPARAM)T(L"url_placeholder"));
 
-    m_hGoBtn = CreateWindowExW(0, L"BUTTON", L"Go",
+    m_hGoBtn = CreateWindowExW(0, L"BUTTON", T(L"Go"),
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, m_hwnd, (HMENU)(INT_PTR)ID_GO_BTN, m_hInst, nullptr);
     SendMessage(m_hGoBtn, WM_SETFONT, (WPARAM)hf, TRUE);
@@ -147,14 +139,17 @@ void MainWindow::OnCreate() {
     m_search->Create(m_hwnd, m_hInst, &m_rend);
     m_downloads->Create(m_hwnd, m_hInst, &m_rend);
 
+    m_search->SetConfig(&cfg);
     m_search->SetDownloadCallback([this](const std::wstring& url, const std::wstring& title) {
         QueueDownload(url, title);
     });
 
     m_settings->SetLogCallback([this](const std::wstring& line) {
         m_downloads->AppendLog(line);
+        Log::Write(line);
     });
 
+    m_downloads->LoadHistory();
     OnTab(Tab::Search);
 }
 
@@ -224,7 +219,7 @@ void MainWindow::DrawTabBar(int W) {
 
     m_rend.FillRect({0, y0, (float)W, y1}, Theme::TabBg());
 
-    const wchar_t* labels[] = { L"Search", L"Downloads", L"Settings" };
+    const wchar_t* labels[] = { T(L"Search"), T(L"Downloads"), T(L"Settings") };
     for (int i = 0; i < (int)Tab::COUNT; i++) {
         float x0 = tabW * i;
         float x1 = x0 + tabW;

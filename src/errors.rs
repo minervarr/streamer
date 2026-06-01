@@ -10,7 +10,7 @@ pub enum AppError {
     ConfigParse(#[from] toml::de::Error),
     #[error("Config serialize error: {0}")]
     ConfigSerialize(#[from] toml::ser::Error),
-    #[error("Not authenticated — run `streamer login` first")]
+    #[error("{}", crate::i18n::t("err_not_authenticated"))]
     NotAuthenticated,
     #[error("{0}")]
     Other(String),
