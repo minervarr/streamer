@@ -16,6 +16,7 @@ set(SOURCES
     src/WheelPicker.cpp
     src/Log.cpp
     src/Strings.cpp
+    src/InspectDialog.cpp
 )
 
 add_executable(streamer-gui WIN32 ${SOURCES})

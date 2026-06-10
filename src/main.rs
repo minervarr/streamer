@@ -4,6 +4,7 @@ mod errors;
 mod extras;
 mod history;
 pub mod i18n;
+mod inspect;
 mod search;
 mod url;
 
@@ -71,6 +72,17 @@ enum Command {
         /// Maximum duration filter: 10m, 1h30m, 90 (seconds), 1:30:00
         #[arg(long)]
         max_duration: Option<String>,
+        /// Account index to use (0-based)  [default: 0]
+        #[arg(long, default_value_t = 0)]
+        account: usize,
+    },
+    /// Inspect an album's track list and regional availability before downloading
+    Inspect {
+        /// Qobuz album or track URL / bare album ID
+        url: String,
+        /// Output tab-separated values for GUI parsing
+        #[arg(long)]
+        tsv: bool,
         /// Account index to use (0-based)  [default: 0]
         #[arg(long, default_value_t = 0)]
         account: usize,
@@ -232,6 +244,16 @@ fn run() -> Result<(), AppError> {
                 .clone();
             let mut api = build_authenticated_api(&acct)?;
             search::run(&mut api, &query, &r#type, tsv, limit, min_secs, max_secs)?;
+        }
+
+        Command::Inspect { url, tsv, account } => {
+            let acct = cfg.accounts.get(account)
+                .ok_or_else(|| AppError::Other(format!("No account at index {account}")))?
+                .clone();
+            let target = url::parse(&url)
+                .ok_or_else(|| AppError::Other(format!("Could not parse URL or ID: {url}")))?;
+            let mut api = build_authenticated_api(&acct)?;
+            inspect::run(&mut api, target, tsv)?;
         }
 
         Command::History { tsv, limit, action } => match action {

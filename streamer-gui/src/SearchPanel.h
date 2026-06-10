@@ -9,6 +9,7 @@
 #include "Config.h"
 #include "QueryParser.h"
 #include "WheelPicker.h"
+#include "InspectDialog.h"
 
 struct CartItem {
     std::wstring id;
@@ -74,5 +75,6 @@ private:
     static constexpr int ID_DL_BTN      = 204;
     static constexpr int ID_CART_LIST   = 205;
     static constexpr int ID_CART_CLEAR  = 206;
-    static constexpr int IDM_DL_ITEM    = 210;
+    static constexpr int IDM_DL_ITEM     = 210;
+    static constexpr int IDM_INSPECT     = 211;
 };

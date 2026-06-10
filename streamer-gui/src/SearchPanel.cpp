@@ -554,13 +554,31 @@ void SearchPanel::OnDownload() {
 
 void SearchPanel::OnContextMenu(int listIdx, POINT pt) {
     if (listIdx < 0 || listIdx >= (int)m_filtered.size()) return;
+    auto& r = m_allResults[m_filtered[listIdx]];
+
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, IDM_DL_ITEM, T(L"Download"));
+    // Inspect is only meaningful for albums
+    bool isAlbum = (r.type == L"album" || r.type == L"albums" || r.type.empty());
+    if (isAlbum)
+        AppendMenuW(menu, MF_STRING, IDM_INSPECT, T(L"Inspect tracks"));
     int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hwnd, nullptr);
     DestroyMenu(menu);
+
     if (cmd == IDM_DL_ITEM) {
         ListView_SetItemState(m_hList, listIdx, LVIS_SELECTED, LVIS_SELECTED);
         OnDownload();
+    } else if (cmd == IDM_INSPECT) {
+        int acctIdx = 0;
+        if (m_cfg) {
+            for (int i = 0; i < (int)m_cfg->accounts.size(); i++) {
+                if (A2W(m_cfg->accounts[i].country) == r.country) { acctIdx = i; break; }
+            }
+        }
+        std::wstring country = m_cfg && acctIdx < (int)m_cfg->accounts.size()
+            ? A2W(m_cfg->accounts[acctIdx].country) : L"";
+        HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(m_hwnd, GWLP_HINSTANCE);
+        InspectDialog::Show(m_hwnd, hInst, r.id, acctIdx, country);
     }
 }
 

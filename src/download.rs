@@ -4,6 +4,7 @@ use qobuz_api::{
     api::service::QobuzApiService,
     metadata::config::{MetadataConfig, MetadataField::CoverArt},
     models::album::Image,
+    sanitize::sanitize_filename,
 };
 
 use crate::{errors::AppError, extras, history, i18n::t, url::DownloadTarget};
@@ -138,7 +139,11 @@ pub fn run(
                 .and_then(|a| a.name.as_deref())
                 .unwrap_or("?");
             println!("\n  {} · {} — {} [{}]\n", t("downloading_track"), artist, title, ql);
-            let path = api.download_track_cancellable(id, format_id, output_dir, Some(&meta), None)?;
+            let track_dir = output_dir
+                .join(sanitize_filename(artist))
+                .join("Singles")
+                .join(sanitize_filename(title));
+            let path = api.download_track_cancellable(id, format_id, &track_dir, Some(&meta), None)?;
             if let Some(url) = track
                 .album
                 .as_ref()

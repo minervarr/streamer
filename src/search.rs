@@ -66,7 +66,7 @@ pub fn parse_duration(s: &str) -> Result<i32, String> {
 
 // ── Duration display ──────────────────────────────────────────────────────────
 
-fn fmt_duration(secs: i32) -> String {
+pub fn fmt_duration(secs: i32) -> String {
     let h = secs / 3600;
     let m = (secs % 3600) / 60;
     let s = secs % 60;
