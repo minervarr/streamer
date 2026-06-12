@@ -1,13 +1,51 @@
-.env
-*.env
+# Build directories
+build/
+dist/
+out/
+bin/
+
+# CMake
+CMakeUserPresets.json
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Compiled objects
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+
+# IDE
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Rust (legacy)
 target/
 Cargo.lock
+
+# Environment
+.env
+*.env
+
+# Project-specific
 thirdPartyKnowledge/
 streamer-gui/build/
 streamer-gui/qbz/
 streamer-gui/vendor/
 
-# LaTeX build artifacts
+# LaTeX
 doc/*.aux
 doc/*.log
 doc/*.out
