@@ -5,46 +5,61 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
+# Configure (vcpkg preset recommended; requires CURL and TagLib available)
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
 # Build
-cargo build
+cmake --build build
 
 # Run
-cargo run -- <subcommand>
+./build/streamer <subcommand>
+```
 
-# Run tests
-cargo test
-
-# Run a single test
-cargo test <test_name>
-
-# Run tests in a specific module
-cargo test --package qobuz-api
+On Windows with vcpkg:
+```powershell
+cmake -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 ```
 
 ## Architecture
 
-This is a two-crate workspace:
+This is a pure C++ project. The CLI binary (`streamer`) is built by `CMakeLists.txt` in the repo root.
 
-- **`streamer`** (binary) — CLI front-end using `clap`. Handles config loading, subcommand dispatch (`login`, `download`, `search`, `config`), and URL parsing.
-- **`qobuz-api`** (library, local path dep) — All Qobuz API logic: authentication, HTTP, metadata embedding, and download I/O.
+**External dependency**: `KawusapiCC/` (git submodule) — the C++ Qobuz API library (C++17).
+
+### Source layout (`src/`)
+
+| File | Purpose |
+|------|---------|
+| `main.cpp` | CLI entry point, subcommand wiring via CLI11 |
+| `config.hh/.cpp` | TOML config read/write (toml++), `Account`/`Settings`/`Config` structs |
+| `download.hh/.cpp` | Download dispatch; calls `kb::download_*` functions |
+| `search.hh/.cpp` | Search result display, duration parsing/formatting |
+| `inspect.hh/.cpp` | Album track listing with availability info |
+| `extras.hh/.cpp` | Cover art, booklet PDF, artist bio download |
+| `history.hh/.cpp` | SQLite3 download history (record/list/export/import/clear) |
+| `url.hh/.cpp` | URL parser for Qobuz links and bare IDs |
+| `i18n.hh/.cpp` | EN/ES translation table, OS language detection |
 
 ### Config
 
-Config lives at `~/.config/streamer/config.toml` (via `dirs::config_dir()`). Fields: `[credentials]` (`app_id`, `app_secret`, `user_id`, `auth_token`) and `[settings]` (`download_dir`, `quality`, `requests_per_minute`, `concurrency`). `app_id`/`app_secret` must be set manually — they're not obtained via `streamer login`.
+Config lives at:
+- **Windows**: `%APPDATA%\streamer\config.toml`
+- **Linux/macOS**: `~/.config/streamer/config.toml`
 
-### Authentication flow
+Fields: `[settings]` (`download_dir`, `quality`, `requests_per_minute`, `concurrency`, `language`) and `[[accounts]]` (`app_id`, `app_secret`, `user_id`, `auth_token`, `country`, `email`). `app_id`/`app_secret` must be set manually before running `streamer login`.
 
-`QobuzApiService::with_credentials(app_id, app_secret)` builds the service; `login_with_token(user_id, token)` authenticates it. The `streamer login` command does both and persists the token. The `qobuz-api` library also supports extracting app credentials by scraping the Qobuz web player JS bundle (`credentials::web::extract_from_web_player`), but the CLI doesn't use this path — it requires the user to supply `app_id`/`app_secret` in the config.
+### Kobuzapi++ internals
 
-### `qobuz-api` internals
-
-- `api/service.rs` — `QobuzApiService`: central state (app credentials, user auth token, HTTP client). All public API methods are declared here via a `delegate!` macro that wraps free functions in submodules.
-- `api/http_client.rs` — `HttpClient` trait + `ReqwestClient` impl. Cloning via `clone_box()` shares the connection pool across concurrent download tasks.
-- `api/content/` — per-resource modules: albums, artists, tracks, playlists, catalog search, plus `*_download.rs` for multi-track download orchestration.
-- `api/content/download_io.rs` — streaming download to disk with resume-on-partial-file, retry with exponential backoff (`MAX_DOWNLOAD_RETRIES=3`, base 2 s).
-- `metadata/` — tag extraction (`extractor.rs`) and embedding into FLAC/MP3 files (`embedder/`).
-- `signing.rs` — request signing logic required by the Qobuz API.
+- `kobuzapi/src/main/cpp/api/service.hh` — `kb::QobuzApiService`: central service class. `with_credentials(Config)` builds it; `login_with_token()` authenticates it.
+- `kobuzapi/src/main/cpp/download/download.hh` — `kb::download_track/album/playlist/artist` free functions.
+- `kobuzapi/src/main/cpp/core/models.hh` — all model structs (`Album`, `Artist`, `Track`, `Playlist`, `FileUrl`, …).
+- `kobuzapi/src/main/cpp/metadata/config.hh` — `kb::MetadataConfig` / `kb::MetadataField` for tag embedding.
+- `kobuzapi/src/main/cpp/api/requests.hh` — `kb::api::signed_get_raw` for raw signed API calls.
+- `engine/archive_engine/src/main/cpp/` — `ae_util`, `ae_net` (libcurl wrapper), `ae_tag` (TagLib wrapper).
 
 ### Quality values
 
-`mp3` | `flac` | `flac-hi` | `flac-ultra` — passed through to the Qobuz file URL endpoint.
+`mp3` (320 kbps) | `flac` (16-bit) | `flac-hi` (24/96) | `flac-ultra` (24/192)
+
+Format IDs: mp3=5, flac=6, flac-hi=7, flac-ultra=27.

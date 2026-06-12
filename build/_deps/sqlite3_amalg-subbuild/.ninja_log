@@ -1,0 +1,21 @@
+# ninja log v7
+2	68	8028747063311938	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-mkdir	26749756e85bd249
+2	68	8028747063311938	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-mkdir	26749756e85bd249
+69	1600	8028747078638687	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-download	3ad5247c3a615334
+69	1600	8028747078638687	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-download	3ad5247c3a615334
+1601	1656	8028747079199802	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-update	6312870ee8a8174a
+1601	1656	8028747079199802	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-update	6312870ee8a8174a
+1657	1713	8028747079771998	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-patch	3feb362585ff80c0
+1657	1713	8028747079771998	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-patch	3feb362585ff80c0
+1714	1774	8028747080381081	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-configure	74cc8ef3cdc63573
+1714	1774	8028747080381081	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-configure	74cc8ef3cdc63573
+1774	1836	8028747080991743	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-build	31fa20d59037ba60
+1774	1836	8028747080991743	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-build	31fa20d59037ba60
+1836	1896	8028747081591918	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-install	747931097fbcccec
+1836	1896	8028747081591918	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-install	747931097fbcccec
+1896	1953	8028747082172926	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-test	d112272ec4cdacba
+1896	1953	8028747082172926	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-test	d112272ec4cdacba
+1954	2033	8028747082967016	CMakeFiles/sqlite3_amalg-populate-complete	c2e49ada361b53f0
+1954	2033	8028747082967016	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-done	c2e49ada361b53f0
+1954	2033	8028747082967016	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/CMakeFiles/sqlite3_amalg-populate-complete	c2e49ada361b53f0
+1954	2033	8028747082967016	C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-done	c2e49ada361b53f0

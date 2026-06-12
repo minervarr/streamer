@@ -1,0 +1,34 @@
+#pragma once
+#include <filesystem>
+#include <string>
+#include <vector>
+
+namespace config {
+
+struct Account {
+    std::string country;
+    std::string email;
+    std::string app_id;
+    std::string app_secret;
+    std::string user_id;
+    std::string auth_token;
+};
+
+struct Settings {
+    std::filesystem::path download_dir;
+    std::string  quality             = "flac";
+    uint32_t     requests_per_minute = 0;
+    uint32_t     concurrency         = 4;
+    std::string  language;
+};
+
+struct Config {
+    std::vector<Account> accounts;
+    Settings settings;
+};
+
+std::filesystem::path config_path();
+Config load();
+void   save(const Config &cfg);
+
+} // namespace config

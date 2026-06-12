@@ -1,0 +1,14 @@
+# Target labels
+ sqlite3_amalg-populate
+# Source files and their labels
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/CMakeFiles/sqlite3_amalg-populate
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/CMakeFiles/sqlite3_amalg-populate.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/CMakeFiles/sqlite3_amalg-populate-complete.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-build.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-configure.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-download.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-install.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-mkdir.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-patch.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-test.rule
+C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-update.rule

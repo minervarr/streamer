@@ -1,0 +1,21 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/curl/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/curl/scripts/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/curl/lib/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/taglib/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/taglib/3rdparty/utfcpp/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/taglib/taglib/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/taglib/bindings/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/third_party/taglib/bindings/c/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/cli11-build/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/cli11-build/fuzz/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/cli11-build/src/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/cli11-build/single-include/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/_deps/tomlplusplus-build/cmake_install.cmake",
+		"C:/Users/incxiuefb/Documents/Files/clone/streamer/build/streamer-gui/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

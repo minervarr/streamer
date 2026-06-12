@@ -41,11 +41,3 @@ target_link_libraries(streamer-gui PRIVATE
     ole32 oleaut32 uuid advapi32
     version ws2_32
 )
-
-# Copy streamer.exe next to the GUI
-set(STREAMER_BIN "${CMAKE_SOURCE_DIR}/../target/release/streamer.exe")
-if(EXISTS ${STREAMER_BIN})
-    add_custom_command(TARGET streamer-gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${STREAMER_BIN}" "$<TARGET_FILE_DIR:streamer-gui>/streamer.exe")
-endif()
