@@ -55,7 +55,7 @@ Config load() {
     if (!fs::exists(path)) return cfg;
 
     try {
-        auto tbl = toml::parse_file(path.string());
+        auto tbl = toml::parse_file(path.u8string());
 
         if (auto *arr = tbl.get_as<toml::array>("accounts")) {
             for (auto &elem : *arr) {
@@ -79,7 +79,7 @@ Config load() {
                     dir.erase(dir.begin());
                 while (!dir.empty() && (dir.back()  == '\'' || dir.back()  == '"'))
                     dir.pop_back();
-                if (!dir.empty()) cfg.settings.download_dir = fs::path(dir);
+                if (!dir.empty()) cfg.settings.download_dir = fs::u8path(dir);
             }
             cfg.settings.quality             = (*s)["quality"            ].value<std::string>().value_or("flac");
             cfg.settings.requests_per_minute = static_cast<uint32_t>((*s)["requests_per_minute"].value<int64_t>().value_or(0));
@@ -122,7 +122,7 @@ void save(const Config &cfg) {
         out << "\n";
     }
     out << "[settings]\n";
-    out << "download_dir = "        << toml_str(cfg.settings.download_dir.string()) << "\n";
+    out << "download_dir = "        << toml_str(cfg.settings.download_dir.u8string()) << "\n";
     out << "quality = "             << toml_str(cfg.settings.quality)               << "\n";
     out << "requests_per_minute = " << cfg.settings.requests_per_minute             << "\n";
     out << "concurrency = "         << cfg.settings.concurrency                     << "\n";
@@ -130,7 +130,7 @@ void save(const Config &cfg) {
         out << "language = " << toml_str(cfg.settings.language) << "\n";
 
     std::ofstream f(path);
-    if (!f) throw std::runtime_error("Cannot write config: " + path.string());
+    if (!f) throw std::runtime_error("Cannot write config: " + path.u8string());
     f << out.str();
 }
 

@@ -112,9 +112,9 @@ static void save_cover(const kb::QobuzApiService &svc, const kb::Album &al, cons
     if (cov.empty()) return;
     fs::path dest = dir / "cover.jpg";
     if (fs::exists(dest)) return;
-    auto res = svc.cdn_client().download_to_file(cov, dest.string());
+    auto res = svc.cdn_client().download_to_file(cov, dest.u8string());
     if (res.ok())
-        std::printf("%s %s\n", i18n::t("saved"), dest.string().c_str());
+        std::printf("%s %s\n", i18n::t("saved"), dest.u8string().c_str());
 }
 
 bool run(kb::QobuzApiService &svc,
@@ -134,7 +134,7 @@ bool run(kb::QobuzApiService &svc,
 
     std::string base_dir = output_dir;
     if (!country.empty())
-        base_dir = (fs::path(output_dir) / country).string();
+        base_dir = (fs::path(output_dir) / country).u8string();
 
     int format_id = quality_to_format_id(quality);
     bool success = false;
@@ -204,7 +204,7 @@ bool run(kb::QobuzApiService &svc,
                 fs::create_directories(single_dir, ec);
                 if (ec) {
                     std::fprintf(stderr, "Cannot create directory %s: %s\n",
-                                 single_dir.string().c_str(), ec.message().c_str());
+                                 single_dir.u8string().c_str(), ec.message().c_str());
                 } else {
                     std::printf("%s %s ...\n", i18n::t("downloading_album"), aid.c_str());
                     std::vector<int> tids = al.track_ids.value_or(std::vector<int>{});
@@ -214,7 +214,7 @@ bool run(kb::QobuzApiService &svc,
                                                  : album_progress(total);
                     for (int tid : tids) {
                         auto tres = kb::download_track(svc, tid, format_id,
-                                                       single_dir.string(), opts);
+                                                       single_dir.u8string(), opts);
                         if (tres.ok()) {
                             paths.push_back(tres.value());
                         } else {
@@ -247,7 +247,7 @@ bool run(kb::QobuzApiService &svc,
                     paths  = res.value();
                     success = !paths.empty();
                     if (save_extras && success) {
-                        fs::path album_dir = fs::path(paths.front()).parent_path();
+                        fs::path album_dir = fs::u8path(paths.front()).parent_path();
                         extras::save_album_extras(svc, aid, album_dir);
                         save_cover(svc, al, album_dir);
                         if (artist_id > 0)

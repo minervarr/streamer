@@ -22,7 +22,7 @@ struct Db {
     sqlite3 *db = nullptr;
     explicit Db(const fs::path &path) {
         fs::create_directories(path.parent_path());
-        if (sqlite3_open(path.string().c_str(), &db) != SQLITE_OK) {
+        if (sqlite3_open(path.u8string().c_str(), &db) != SQLITE_OK) {
             std::string msg = "Cannot open history db: ";
             msg += sqlite3_errmsg(db);
             sqlite3_close(db);

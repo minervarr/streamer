@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
 
             std::string quality = dl_quality.empty() ? cur.settings.quality : dl_quality;
             std::string outdir  = dl_output.empty()
-                ? cur.settings.download_dir.string() : dl_output;
+                ? cur.settings.download_dir.u8string() : dl_output;
             if (outdir.empty()) outdir = ".";
             int conc = (dl_concurrency > 0) ? dl_concurrency
                                             : static_cast<int>(cur.settings.concurrency);
@@ -273,9 +273,9 @@ int main(int argc, char **argv) {
         show->callback([&]() {
             config::Config cur = config::load();
             std::printf("%s %s\n", i18n::t("config_file"),
-                        config::config_path().string().c_str());
+                        config::config_path().u8string().c_str());
             std::printf("%s %s\n", i18n::t("download_dir_label"),
-                        cur.settings.download_dir.string().c_str());
+                        cur.settings.download_dir.u8string().c_str());
             std::printf("%s %s\n", i18n::t("quality_label"),
                         cur.settings.quality.c_str());
             std::printf("%s\n", i18n::t("accounts_label"));
@@ -324,7 +324,7 @@ int main(int argc, char **argv) {
             std::string outpath = hist_export_path.empty() ? "history_export.json"
                                                            : hist_export_path;
             std::string json = history::export_json();
-            std::ofstream f(outpath);
+            std::ofstream f(fs::u8path(outpath));
             if (!f) {
                 std::fprintf(stderr, "%s %s\n",
                              i18n::t("warning_could_not_save"), outpath.c_str());
@@ -337,7 +337,7 @@ int main(int argc, char **argv) {
         auto *imp = sub->add_subcommand("import", i18n::t("cmd_import"));
         imp->add_option("file", hist_import_path, "JSON file to import")->required();
         imp->callback([&]() {
-            std::ifstream f(hist_import_path);
+            std::ifstream f(fs::u8path(hist_import_path));
             if (!f) {
                 std::fprintf(stderr, "%s %s\n",
                              i18n::t("warning_could_not_read"), hist_import_path.c_str());

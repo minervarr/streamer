@@ -21,12 +21,12 @@ static void download_file(const ae::HttpClient &client,
                           const char *label)
 {
     if (fs::exists(dest)) return;
-    auto res = client.download_to_file(url, dest.string());
+    auto res = client.download_to_file(url, dest.u8string());
     if (!res.ok())
         std::fprintf(stderr, "%s %s: %s\n", i18n::t("warning_could_not_download"),
                      label, res.error().message.c_str());
     else
-        std::printf("%s %s\n", i18n::t("saved"), dest.string().c_str());
+        std::printf("%s %s\n", i18n::t("saved"), dest.u8string().c_str());
 }
 
 static void save_text(const std::string &text, const fs::path &dest) {
@@ -34,11 +34,11 @@ static void save_text(const std::string &text, const fs::path &dest) {
     std::ofstream f(dest);
     if (!f) {
         std::fprintf(stderr, "%s %s\n", i18n::t("warning_could_not_save"),
-                     dest.string().c_str());
+                     dest.u8string().c_str());
         return;
     }
     f << text;
-    std::printf("%s %s\n", i18n::t("saved"), dest.string().c_str());
+    std::printf("%s %s\n", i18n::t("saved"), dest.u8string().c_str());
 }
 
 // Rewrite "…_600.jpg" → "…_org.jpg" to get full-resolution cover.
