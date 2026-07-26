@@ -4,6 +4,9 @@
 [submodule "third_party/taglib"]
 	path = third_party/taglib
 	url = https://github.com/taglib/taglib.git
-[submodule "KawusapiCC"]
-	path = KawusapiCC
+[submodule "first_party/KawusapiCC"]
+	path = first_party/KawusapiCC
 	url = https://github.com/minervarr/KawusapiCC
+[submodule "framework/Vk_Canvas_Lb_LAW"]
+	path = framework/Vk_Canvas_Lb_LAW
+	url = https://github.com/minervarr/Vk_Canvas_Lb_LAW

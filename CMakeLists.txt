@@ -9,7 +9,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}")
 
 # Paths into Kobuzapi++
-set(KOBUZAPI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/KawusapiCC")
+set(KOBUZAPI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/first_party/KawusapiCC")
 set(ENGINE_CPP   "${KOBUZAPI_ROOT}/engine/archive_engine/src/main/cpp")
 set(KBAPI_CPP    "${KOBUZAPI_ROOT}/kobuzapi/src/main/cpp")
 
@@ -135,9 +135,8 @@ target_compile_definitions(sqlite3_lib PRIVATE
     SQLITE_DEFAULT_MEMSTATUS=0
 )
 
-# ── streamer executable ──────────────────────────────────────────────────────
-add_executable(streamer
-    src/main.cpp
+# ── streamer_core (backend logic shared by the CLI and the GUI) ─────────────
+add_library(streamer_core STATIC
     src/config.cpp
     src/history.cpp
     src/download.cpp
@@ -147,16 +146,22 @@ add_executable(streamer
     src/extras.cpp
     src/i18n.cpp
 )
-target_include_directories(streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(streamer PRIVATE
+target_include_directories(streamer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(streamer_core PUBLIC
     kobuzapi
     sqlite3_lib
-    CLI11::CLI11
     tomlplusplus::tomlplusplus
 )
 if(WIN32)
-    target_link_libraries(streamer PRIVATE ws2_32 wldap32 crypt32 normaliz)
+    target_link_libraries(streamer_core PUBLIC ws2_32 wldap32 crypt32 normaliz)
 endif()
+if(MSVC)
+    target_compile_options(streamer_core PRIVATE /O2 /Ob2 /arch:AVX2 /MP /W3 /utf-8)
+endif()
+
+# ── streamer executable (CLI) ────────────────────────────────────────────────
+add_executable(streamer src/main.cpp)
+target_link_libraries(streamer PRIVATE streamer_core CLI11::CLI11)
 if(MSVC)
     target_compile_options(streamer PRIVATE /O2 /Ob2 /arch:AVX2 /MP /W3 /utf-8)
 endif()
