@@ -10,17 +10,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}")
 
 # Paths into Kobuzapi++
 set(KOBUZAPI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/first_party/KawusapiCC")
-set(ENGINE_CPP   "${KOBUZAPI_ROOT}/engine/archive_engine/src/main/cpp")
-set(KBAPI_CPP    "${KOBUZAPI_ROOT}/kobuzapi/src/main/cpp")
-
-# ── ae_util (no external deps) ──────────────────────────────────────────────
-add_library(ae_util STATIC
-    ${ENGINE_CPP}/util/src/md5.cc
-    ${ENGINE_CPP}/util/src/base64.cc
-    ${ENGINE_CPP}/util/src/sanitize.cc
-)
-target_include_directories(ae_util PUBLIC ${ENGINE_CPP}/util/include)
-target_compile_features(ae_util PUBLIC cxx_std_17)
 
 # ── bundled curl (third_party/curl) ─────────────────────────────────────────
 set(BUILD_CURL_EXE        OFF CACHE BOOL "" FORCE)
@@ -52,11 +41,6 @@ set(USE_LIBIDN2           OFF CACHE BOOL "" FORCE)
 set(CURL_ZLIB             OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/curl)
 
-add_library(ae_net STATIC ${ENGINE_CPP}/net/src/http.cc)
-target_include_directories(ae_net PUBLIC ${ENGINE_CPP}/net/include)
-target_compile_features(ae_net PUBLIC cxx_std_17)
-target_link_libraries(ae_net PUBLIC ae_util PRIVATE CURL::libcurl)
-
 # ── bundled taglib (third_party/taglib) ─────────────────────────────────────
 set(BUILD_SHARED_LIBS     OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
@@ -81,31 +65,14 @@ configure_file(
     "${_taglib_flat}/taglib_config.h"
     COPYONLY)
 
-add_library(ae_tag STATIC ${ENGINE_CPP}/tag/src/tag.cc)
-target_include_directories(ae_tag PUBLIC ${ENGINE_CPP}/tag/include)
+# ── Kobuzapi++ (KawusapiCC/core: kobuzapi_core, ae_util, ae_net, ae_tag) ────
+# CURL::libcurl and `tag` (TagLib) targets above must exist before this —
+# KawusapiCC/core's ae_net/ae_tag CMakeLists.txt link against them directly
+# instead of streamer re-implementing http.cc/tag.cc compilation itself.
+add_subdirectory(${KOBUZAPI_ROOT}/core ${CMAKE_BINARY_DIR}/kobuzapi_core)
 target_include_directories(ae_tag PRIVATE
     "${CMAKE_BINARY_DIR}/taglib_flat_include"   # flat <taglib/...> layout
 )
-target_compile_features(ae_tag PUBLIC cxx_std_17)
-target_link_libraries(ae_tag PUBLIC ae_util PRIVATE tag)
-
-# ── kobuzapi C++ library (no JNI) ────────────────────────────────────────────
-add_library(kobuzapi STATIC
-    ${KBAPI_CPP}/core/errors.cc
-    ${KBAPI_CPP}/core/json.cc
-    ${KBAPI_CPP}/core/credentials.cc
-    ${KBAPI_CPP}/api/requests.cc
-    ${KBAPI_CPP}/api/service.cc
-    ${KBAPI_CPP}/metadata/extractor.cc
-    ${KBAPI_CPP}/metadata/performers.cc
-    ${KBAPI_CPP}/metadata/embedder.cc
-    ${KBAPI_CPP}/download/download.cc
-)
-target_include_directories(kobuzapi PUBLIC
-    ${KBAPI_CPP}
-    ${KBAPI_CPP}/third_party
-)
-target_link_libraries(kobuzapi PUBLIC ae_util ae_net ae_tag)
 
 # ── FetchContent dependencies ────────────────────────────────────────────────
 include(FetchContent)
@@ -148,7 +115,7 @@ add_library(streamer_core STATIC
 )
 target_include_directories(streamer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(streamer_core PUBLIC
-    kobuzapi
+    kobuzapi_core
     sqlite3_lib
     tomlplusplus::tomlplusplus
 )
