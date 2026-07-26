@@ -166,7 +166,32 @@ if(MSVC)
     target_compile_options(streamer PRIVATE /O2 /Ob2 /arch:AVX2 /MP /W3 /utf-8)
 endif()
 
-# ── GUI (Windows only) ───────────────────────────────────────────────────────
+# ── legacy GUI (Windows only; preserved as reference until the new gui/ port
+#    is complete) ─────────────────────────────────────────────────────────────
 if(WIN32)
     add_subdirectory(streamer-gui)
+endif()
+
+# ── new cross-platform GUI (Vulkan/vk_canvas) ───────────────────────────────
+# Needs a Slang shader compiler (Vulkan SDK / shader-slang) at build time, so
+# a box without one must still configure. Override with -DSTREAMER_GUI=ON/OFF
+# and -DVCE_SLANGC=/path/to/slangc.
+if(WIN32)
+    set(_gui_default ON)
+elseif(UNIX)
+    set(_gui_default OFF)
+    if(VCE_SLANGC OR DEFINED ENV{VULKAN_SDK})
+        set(_gui_default ON)
+    else()
+        find_program(_slangc_probe slangc)
+        if(_slangc_probe)
+            set(_gui_default ON)
+        endif()
+    endif()
+endif()
+option(STREAMER_GUI "Build the new Vulkan/vk_canvas GUI" ${_gui_default})
+if(STREAMER_GUI)
+    add_subdirectory(gui)
+else()
+    message(STATUS "gui skipped (no slangc found; pass -DSTREAMER_GUI=ON + -DVCE_SLANGC=/path/to/slangc)")
 endif()
