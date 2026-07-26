@@ -11,10 +11,13 @@
 
 #include "canvas.hh"
 #include "frame_input.hh"
+#include "widgets.hh"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -83,12 +86,51 @@ int run_selftest() {
 
 } // namespace
 
+namespace {
+
+// Dev-only fake data for --widget-preview (Phase 4's sortable-table visual
+// check): the same 10 columns streamer-gui's ListView used.
+const std::vector<widgets::TableColumn>& previewColumns() {
+    static const std::vector<widgets::TableColumn> cols = {
+        {"Title", 2.2f}, {"Artist", 1.6f}, {"Label", 1.4f}, {"Date", 0.9f},
+        {"Duration", 0.8f}, {"Genre", 1.1f}, {"Hi-Res", 0.7f}, {"Explicit", 0.8f},
+        {"Type", 0.8f}, {"Country", 0.9f},
+    };
+    return cols;
+}
+
+std::string previewCell(int row, int col) {
+    static const char* titles[] = {"Chico Não Vou Fazer Nada", "Cheguei", "Escândalo Íntimo",
+                                   "Serena", "Anaconda", "Fallin'", "Doçura", "Boa Menina",
+                                   "Modo Turbo", "Penhasco 2"};
+    static const char* artists[] = {"Luísa Sonza", "MC Kevin", "Anitta", "Ivete Sangalo",
+                                    "Marília Mendonça", "Ana Castela", "Pabllo Vittar",
+                                    "Manu Bahtidão", "Wiu", "Djonga"};
+    switch (col) {
+        case 0: return titles[row % 10];
+        case 1: return artists[row % 10];
+        case 2: return "Warner Music";
+        case 3: return std::to_string(2018 + (row % 7));
+        case 4: return std::to_string(150 + row * 7);
+        case 5: return "Pop";
+        case 6: return (row % 3 == 0) ? "yes" : "no";
+        case 7: return (row % 5 == 0) ? "yes" : "no";
+        case 8: return "track";
+        case 9: return "BR";
+        default: return "";
+    }
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
     bool theme_preview = false;
+    bool widget_preview = false;
     const char* capture_path = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) return run_selftest();
         if (std::strcmp(argv[i], "--theme-preview") == 0) theme_preview = true;
+        if (std::strcmp(argv[i], "--widget-preview") == 0) widget_preview = true;
         if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) capture_path = argv[++i];
     }
 
@@ -117,6 +159,50 @@ int main(int argc, char** argv) {
                       /*insetLeft=*/0, /*insetRight=*/0);
         canvas.useShapes(&shapeVerts);
         canvas.clear(theme::kBackground);
+
+        if (widget_preview) {
+            // Visual + interaction check for Phase 4: click a header cell to
+            // sort by that column (toggling direction on repeated clicks),
+            // scroll the body, confirm hover highlighting and the
+            // sort-direction glyph render correctly.
+            static int sortCol = 1;  // Artist, ascending — visible without interaction
+            static bool sortAsc = true;
+            static float scrollPx = 0.0f;
+            const auto& cols = previewColumns();
+            const int rowCount = 24;
+
+            float w = (float)r.width(), h = (float)r.height();
+            Rect area = {w * 0.05f, h * 0.08f, w * 0.9f, h * 0.8f};
+            float rowH = h * 0.05f;
+
+            Rect header = widgets::tableHeaderRow(area, rowH);
+            auto headerRects = widgets::tableHeaderColumnRects(header, cols);
+            int hoverHeaderCol = -1;
+            for (size_t i = 0; i < headerRects.size(); i++) {
+                if (headerRects[i].contains(input.pointerX, input.pointerY)) {
+                    hoverHeaderCol = (int)i;
+                    if (input.pointerWentDown) {
+                        if (sortCol == (int)i) sortAsc = !sortAsc;
+                        else { sortCol = (int)i; sortAsc = true; }
+                    }
+                }
+            }
+            if (input.wheelDelta != 0.0f) {
+                scrollPx += input.wheelDelta * rowH;
+                float maxScroll = std::max(0.0f, rowCount * rowH - (area.h - rowH));
+                if (scrollPx < 0.0f) scrollPx = 0.0f;
+                if (scrollPx > maxScroll) scrollPx = maxScroll;
+            }
+
+            int hoverRow = -1;
+            Rect body = {area.x, area.y + rowH, area.w, area.h - rowH};
+            if (body.contains(input.pointerX, input.pointerY))
+                hoverRow = (int)((input.pointerY - body.y + scrollPx) / rowH);
+
+            widgets::drawSortableTable(canvas, area, cols, previewCell, rowCount,
+                                       sortCol, sortAsc, scrollPx, rowH,
+                                       hoverRow, hoverHeaderCol);
+        }
 
         if (theme_preview) {
             // Visual check for Phase 2: a row of gradient buttons/bars at
