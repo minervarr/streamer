@@ -6,6 +6,7 @@
 // SettingsController and their views in here.
 
 #include "host.hh"
+#include "query_dsl.hh"
 #include "theme.hh"
 
 #include "canvas.hh"
@@ -19,11 +20,65 @@
 namespace {
 
 // Headless smoke-test entry point (scanersito's convention): exercises
-// pure-logic pieces with no window/GPU. Currently a no-op placeholder —
-// Phase 3 adds the query DSL assertions here.
+// pure-logic pieces with no window/GPU/network. query_dsl assertions cover
+// every operator and field, including the exact accent-preservation
+// scenario that motivated this port (see query_dsl.hh) — typing "Luísa
+// Sonza" must match a row for "Luísa Sonza" without corruption, and an
+// ALL-CAPS accented query must still fold correctly against a lowercase
+// accented row.
+int g_fail_count = 0;
+
+void check(bool cond, const char* what) {
+    if (!cond) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_fail_count; }
+}
+
 int run_selftest() {
-    std::printf("selftest: ok (no assertions registered yet)\n");
-    return 0;
+    using namespace query_dsl;
+
+    SearchResult luisa;
+    luisa.title = "Chico Não Vou Fazer Nada";
+    luisa.artist = "Luísa Sonza";
+    luisa.type = "track";
+    luisa.year = 2023;
+    luisa.duration = 195;
+    luisa.hires = false;
+
+    // Bare term, accent preserved through tokenizer + case-fold.
+    check(Match(Parse("Sonza"), luisa), "bare term 'Sonza' matches artist");
+    check(Match(Parse("Luísa Sonza"), luisa), "bare terms 'Luísa Sonza' match (accent intact)");
+    check(Match(Parse("LUÍSA"), luisa), "uppercase accented 'LUÍSA' folds to match 'Luísa'");
+    check(!Match(Parse("Shakira"), luisa), "unrelated term does not match");
+
+    // Quoted filter value, accent preserved.
+    check(Match(Parse("artist:\"Luísa Sonza\""), luisa), "artist:\"Luísa Sonza\" matches");
+    check(!Match(Parse("artist:\"Anitta\""), luisa), "artist:\"Anitta\" does not match");
+
+    // Numeric range and comparison.
+    check(Match(Parse("year:2020-2024"), luisa), "year:2020-2024 matches 2023");
+    check(!Match(Parse("year:2000-2010"), luisa), "year:2000-2010 does not match 2023");
+    check(Match(Parse("duration:>100"), luisa), "duration:>100 matches 195");
+    check(!Match(Parse("duration:<100"), luisa), "duration:<100 does not match 195");
+
+    // Boolean AND (implicit)/OR/NOT.
+    check(Match(Parse("sonza year:2023"), luisa), "implicit AND: sonza year:2023");
+    check(!Match(Parse("sonza year:1999"), luisa), "implicit AND fails on wrong year");
+    check(Match(Parse("type:album or type:track"), luisa), "OR: type:album or type:track");
+    check(Match(Parse("not hires:true"), luisa), "NOT: not hires:true (hires is false)");
+    check(!Match(Parse("not sonza"), luisa), "NOT: not sonza excludes a matching row");
+
+    // Base term / type hint extraction (used to build the API query).
+    check(ExtractBaseTerm(Parse("artist:\"Luísa Sonza\" year:2023")) == "Luísa Sonza",
+         "ExtractBaseTerm picks the artist filter value");
+    check(ExtractTypeHint(Parse("type:album sonza")) == "album",
+         "ExtractTypeHint reads type: filter");
+    check(ExtractTypeHint(Parse("sonza")).empty(), "ExtractTypeHint empty with no type: filter");
+
+    if (g_fail_count == 0) {
+        std::printf("selftest: ok (%d assertions)\n", 15);
+        return 0;
+    }
+    std::fprintf(stderr, "selftest: %d assertion(s) failed\n", g_fail_count);
+    return 1;
 }
 
 } // namespace
