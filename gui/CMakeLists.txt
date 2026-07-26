@@ -57,6 +57,7 @@ add_executable(streamer_gui
     src/gui_main.cc
     src/query_dsl.cc
     src/search_controller.cc
+    src/settings_controller.cc
     src/views.cc
     ${_gui_host_sources}
 )

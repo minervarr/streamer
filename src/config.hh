@@ -31,4 +31,10 @@ std::filesystem::path config_path();
 Config load();
 void   save(const Config &cfg);
 
+// Export/import to an arbitrary path (Settings screen's Export/Import
+// Accounts) — same TOML shape as the main config file, just not read from
+// or written to config_path().
+Config load(const std::filesystem::path &path);
+void   save(const Config &cfg, const std::filesystem::path &path);
+
 } // namespace config

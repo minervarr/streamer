@@ -160,4 +160,146 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
     hits.push_back({dlRect, ActDownloadSelected});
 }
 
+namespace {
+
+// Label + text field sharing one row, same proportions as
+// widgets::drawDropdownField's label/value split.
+void labeledField(Canvas& c, const Rect& row, std::string_view label,
+                  const widgets::TextFieldState& field, bool focused,
+                  std::vector<Hit>& hits, int action) {
+    float fieldW = row.w * 0.68f;
+    Rect labelZone = {row.x, row.y, row.w - fieldW - row.h * 0.3f, row.h};
+    Rect fieldRect = {row.x + row.w - fieldW, row.y, fieldW, row.h};
+    c.text(label, labelZone.x, labelZone.y + row.h * 0.3f, row.h * 0.4f, theme::kText);
+    widgets::drawTextField(c, fieldRect, field, focused, "", theme::kTextField);
+    hits.push_back({fieldRect, action});
+}
+
+std::string accountLabel(const config::Account& a, int idx) {
+    if (!a.email.empty()) return a.email;
+    if (!a.country.empty()) return "Account (" + a.country + ")";
+    return "Account " + std::to_string(idx + 1);
+}
+
+} // namespace
+
+void draw_settings(Canvas& c, const Rect& area, const settings::SettingsController& ctl,
+                   const widgets::TextFieldState fields[FieldCount], int focusedField,
+                   int accountListHover, float rowH,
+                   std::vector<Hit>& hits) {
+    float pad = rowH * 0.3f;
+    float y = area.y;
+    float halfW = area.w * 0.48f;
+    Rect leftCol = {area.x, y, halfW, area.h};
+    Rect rightCol = {area.x + area.w - halfW, y, halfW, area.h};
+
+    // ── Left column: accounts ────────────────────────────────────────────────
+    {
+        float ly = leftCol.y;
+        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Accounts");
+        ly += rowH * 1.1f;
+
+        std::vector<std::string> labels;
+        const auto& accts = ctl.accounts();
+        for (size_t i = 0; i < accts.size(); i++) labels.push_back(accountLabel(accts[i], (int)i));
+        Rect listArea = {leftCol.x, ly, leftCol.w, rowH * 3.2f};
+        auto rows = widgets::drawScrollList(c, listArea, labels, ctl.current_account_index(),
+                                            0.0f, rowH, accountListHover, widgets::kTextFree,
+                                            theme::kScrollList);
+        for (auto& lr : rows) hits.push_back({lr.rect, ActAccountListBase + lr.index});
+        ly += listArea.h + pad;
+
+        Rect addRect = {leftCol.x, ly, leftCol.w * 0.48f, rowH};
+        Rect delRect = {leftCol.x + leftCol.w * 0.52f, ly, leftCol.w * 0.48f, rowH};
+        widgets::drawFitButton(c, addRect, "Add Account", theme::kPanel, theme::kText, rowH * 0.2f);
+        widgets::drawFitButton(c, delRect, "Remove", theme::kPanel, theme::kText, rowH * 0.2f);
+        hits.push_back({addRect, ActAddAccount});
+        hits.push_back({delRect, ActRemoveAccount});
+        ly += rowH + pad * 1.5f;
+
+        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Account details");
+        ly += rowH * 1.1f;
+
+        Rect row = {leftCol.x, ly, leftCol.w, rowH};
+        labeledField(c, row, "Country", fields[FieldCountry], focusedField == FieldCountry, hits, ActFieldFocusBase + FieldCountry);
+        row.y += rowH * 1.15f;
+        labeledField(c, row, "Email", fields[FieldEmail], focusedField == FieldEmail, hits, ActFieldFocusBase + FieldEmail);
+        row.y += rowH * 1.15f;
+        labeledField(c, row, "App ID", fields[FieldAppId], focusedField == FieldAppId, hits, ActFieldFocusBase + FieldAppId);
+        row.y += rowH * 1.15f;
+        labeledField(c, row, "App Secret", fields[FieldAppSecret], focusedField == FieldAppSecret, hits, ActFieldFocusBase + FieldAppSecret);
+        row.y += rowH * 1.15f;
+        labeledField(c, row, "User ID", fields[FieldUserId], focusedField == FieldUserId, hits, ActFieldFocusBase + FieldUserId);
+        row.y += rowH * 1.15f;
+        labeledField(c, row, "Auth Token", fields[FieldAuthToken], focusedField == FieldAuthToken, hits, ActFieldFocusBase + FieldAuthToken);
+        row.y += rowH * 1.3f;
+
+        Rect loginRect = {row.x, row.y, leftCol.w * 0.5f, rowH};
+        theme::accentButton(c, loginRect.x, loginRect.y, loginRect.w, loginRect.h,
+                            "Login with Token", rowH * 0.2f);
+        hits.push_back({loginRect, ActLoginWithToken});
+        row.y += rowH * 1.3f;
+
+        Rect expRect = {row.x, row.y, leftCol.w * 0.48f, rowH};
+        Rect impRect = {row.x + leftCol.w * 0.52f, row.y, leftCol.w * 0.48f, rowH};
+        widgets::drawFitButton(c, expRect, "Export Accounts", theme::kPanel, theme::kText, rowH * 0.2f);
+        widgets::drawFitButton(c, impRect, "Import Accounts", theme::kPanel, theme::kText, rowH * 0.2f);
+        hits.push_back({expRect, ActExportAccounts});
+        hits.push_back({impRect, ActImportAccounts});
+    }
+
+    // ── Right column: global settings ───────────────────────────────────────
+    {
+        float ry = rightCol.y;
+        widgets::drawGroupHeader(c, {rightCol.x, ry, rightCol.w, rowH}, "Global Settings");
+        ry += rowH * 1.1f;
+
+        Rect qualityRow = {rightCol.x, ry, rightCol.w, rowH};
+        int qIdx = 1; // flac default
+        for (int i = 0; i < kQualityCount; i++) if (ctl.config().settings.quality == kQualityValues[i]) qIdx = i;
+        widgets::drawSegmented(c, qualityRow, kQualityOptions, kQualityCount, qIdx, theme::kSegmented);
+        auto qRects = widgets::segmentRects(qualityRow, kQualityCount);
+        for (int i = 0; i < kQualityCount; i++) hits.push_back({qRects[(size_t)i], ActQualityBase + i});
+        ry += rowH * 1.3f;
+
+        widgets::drawStepper(c, {rightCol.x, ry, rightCol.w, rowH}, "Concurrency",
+                             std::to_string(ctl.config().settings.concurrency), theme::kStepper);
+        auto cg = widgets::stepperGeom({rightCol.x, ry, rightCol.w, rowH});
+        hits.push_back({cg.minus, ActConcurrencyMinus});
+        hits.push_back({cg.plus, ActConcurrencyPlus});
+        ry += rowH * 1.15f;
+
+        widgets::drawStepper(c, {rightCol.x, ry, rightCol.w, rowH}, "Requests/min (0=unlimited)",
+                             std::to_string(ctl.config().settings.requests_per_minute), theme::kStepper);
+        auto rg = widgets::stepperGeom({rightCol.x, ry, rightCol.w, rowH});
+        hits.push_back({rg.minus, ActRpmMinus});
+        hits.push_back({rg.plus, ActRpmPlus});
+        ry += rowH * 1.3f;
+
+        Rect dirRow = {rightCol.x, ry, rightCol.w, rowH};
+        labeledField(c, dirRow, "Download Dir", fields[FieldDownloadDir],
+                    focusedField == FieldDownloadDir, hits, ActFieldFocusBase + FieldDownloadDir);
+        Rect browseRect = {dirRow.x, dirRow.y + rowH * 1.15f, rightCol.w * 0.3f, rowH};
+        widgets::drawFitButton(c, browseRect, "Browse...", theme::kPanel, theme::kText, rowH * 0.2f);
+        hits.push_back({browseRect, ActBrowseDownloadDir});
+        ry += rowH * 2.45f;
+
+        Rect langRow = {rightCol.x, ry, rightCol.w * 0.5f, rowH};
+        int lIdx = ctl.config().settings.language == "es" ? 1 : 0;
+        widgets::drawSegmented(c, langRow, kLanguageOptions, kLanguageCount, lIdx, theme::kSegmented);
+        auto lRects = widgets::segmentRects(langRow, kLanguageCount);
+        for (int i = 0; i < kLanguageCount; i++) hits.push_back({lRects[(size_t)i], ActLanguageBase + i});
+        ry += rowH * 1.3f;
+
+        Rect saveRect = {rightCol.x, ry, rightCol.w * 0.3f, rowH * 1.2f};
+        theme::accentButton(c, saveRect.x, saveRect.y, saveRect.w, saveRect.h,
+                            ctl.dirty() ? "Save*" : "Save", rowH * 0.2f);
+        hits.push_back({saveRect, ActSettingsSave});
+        ry += rowH * 1.6f;
+
+        if (!ctl.last_error().empty())
+            c.text(ctl.last_error(), rightCol.x, ry, rowH * 0.32f, theme::kAccentHi);
+    }
+}
+
 } // namespace gui

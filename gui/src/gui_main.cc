@@ -240,12 +240,14 @@ int main(int argc, char** argv) {
     bool theme_preview = false;
     bool widget_preview = false;
     bool demo = false;
+    bool start_settings = false;
     const char* capture_path = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) return run_selftest();
         if (std::strcmp(argv[i], "--theme-preview") == 0) theme_preview = true;
         if (std::strcmp(argv[i], "--widget-preview") == 0) widget_preview = true;
         if (std::strcmp(argv[i], "--demo") == 0) demo = true;
+        if (std::strcmp(argv[i], "--settings") == 0) start_settings = true;
         if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) capture_path = argv[++i];
     }
 
@@ -267,6 +269,17 @@ int main(int argc, char** argv) {
     widgets::TextFieldState queryField;
     int typePickerIndex = 0;
     float tableScrollPx = 0.0f;
+
+    settings::SettingsController settingsCtl;
+    widgets::TextFieldState settingsFields[gui::FieldCount];
+    settingsFields[gui::FieldDownloadDir].text = settingsCtl.config().settings.download_dir.string();
+    int focusedField = -1;
+    int loadedAccountIdx = -1;
+    int accountListHover = -1;
+
+    enum class Screen { Search, Settings };
+    Screen activeScreen = start_settings ? Screen::Settings : Screen::Search;
+    constexpr int kActNavSearch = 9000, kActNavSettings = 9001;
 
     if (demo) {
         // Dev tooling only (visual verification, not shipped functionality):
@@ -302,46 +315,132 @@ int main(int argc, char** argv) {
         float rowH = h * 0.045f;
 
         // ── Dispatch against LAST frame's hits before drawing this frame ────
+        // (nav bar + whichever screen was active when those hits were built —
+        // switching screens only takes effect below, after dispatch, so the
+        // screen that drew `hits` last frame is still the right one to
+        // interpret them against.)
         int hoverRow = -1, hoverHeaderCol = -1;
         for (auto& hit : hits) {
             if (!hit.rect.contains(input.pointerX, input.pointerY)) continue;
-            if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase)
-                hoverHeaderCol = hit.action - gui::ActTableHeaderBase;
-            else if (hit.action >= gui::ActTableRowBase)
-                hoverRow = hit.action - gui::ActTableRowBase;
+            if (activeScreen == Screen::Search) {
+                if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase)
+                    hoverHeaderCol = hit.action - gui::ActTableHeaderBase;
+                else if (hit.action >= gui::ActTableRowBase)
+                    hoverRow = hit.action - gui::ActTableRowBase;
+            } else if (hit.action >= gui::ActAccountListBase && hit.action < gui::ActQualityBase) {
+                accountListHover = hit.action - gui::ActAccountListBase;
+            }
 
             if (!input.pointerWentDown) continue;
-            if (hit.action == gui::ActToggleCheatsheet) {
-                searchCtl.toggle_cheatsheet();
-            } else if (hit.action == gui::ActSubmitSearch) {
-                searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
-                tableScrollPx = 0.0f;
-            } else if (hit.action >= gui::ActTypePickerBase && hit.action < gui::ActTableHeaderBase) {
-                typePickerIndex = hit.action - gui::ActTypePickerBase;
-            } else if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase) {
-                auto sc = gui::sortColumnForTableIndex(hit.action - gui::ActTableHeaderBase);
-                if (sc != search::SortColumn::None) searchCtl.sort(sc);
-            } else if (hit.action >= gui::ActTableRowBase) {
-                searchCtl.toggle_selected(hit.action - gui::ActTableRowBase);
-            } else if (hit.action == gui::ActDownloadSelected && !searchCtl.selected().empty()) {
-                std::vector<std::string> ids;
-                for (int idx : searchCtl.selected()) ids.push_back(searchCtl.results()[(size_t)idx].id);
-                download_async(account, cfg.settings.quality, cfg.settings.download_dir.string(),
-                              account.country, ids);
-                searchCtl.clear_selection();
+
+            if (hit.action == kActNavSearch) { activeScreen = Screen::Search; continue; }
+            if (hit.action == kActNavSettings) { activeScreen = Screen::Settings; continue; }
+
+            if (activeScreen == Screen::Search) {
+                if (hit.action == gui::ActToggleCheatsheet) {
+                    searchCtl.toggle_cheatsheet();
+                } else if (hit.action == gui::ActSubmitSearch) {
+                    searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
+                    tableScrollPx = 0.0f;
+                } else if (hit.action >= gui::ActTypePickerBase && hit.action < gui::ActTableHeaderBase) {
+                    typePickerIndex = hit.action - gui::ActTypePickerBase;
+                } else if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase) {
+                    auto sc = gui::sortColumnForTableIndex(hit.action - gui::ActTableHeaderBase);
+                    if (sc != search::SortColumn::None) searchCtl.sort(sc);
+                } else if (hit.action >= gui::ActTableRowBase) {
+                    searchCtl.toggle_selected(hit.action - gui::ActTableRowBase);
+                } else if (hit.action == gui::ActDownloadSelected && !searchCtl.selected().empty()) {
+                    std::vector<std::string> ids;
+                    for (int idx : searchCtl.selected()) ids.push_back(searchCtl.results()[(size_t)idx].id);
+                    download_async(account, settingsCtl.config().settings.quality,
+                                  settingsCtl.config().settings.download_dir.string(),
+                                  account.country, ids);
+                    searchCtl.clear_selection();
+                }
+            } else {  // Screen::Settings
+                if (hit.action >= gui::ActAccountListBase && hit.action < gui::ActQualityBase) {
+                    settingsCtl.select_account(hit.action - gui::ActAccountListBase);
+                } else if (hit.action == gui::ActAddAccount) {
+                    settingsCtl.add_account();
+                } else if (hit.action == gui::ActRemoveAccount) {
+                    settingsCtl.remove_account(settingsCtl.current_account_index());
+                } else if (hit.action == gui::ActLoginWithToken) {
+                    settingsCtl.login_with_token(settingsFields[gui::FieldUserId].text,
+                                                 settingsFields[gui::FieldAuthToken].text);
+                } else if (hit.action == gui::ActExportAccounts) {
+                    settingsCtl.export_to((config::config_path().parent_path() / "accounts-export.toml").string());
+                } else if (hit.action == gui::ActImportAccounts) {
+                    settingsCtl.import_from((config::config_path().parent_path() / "accounts-export.toml").string());
+                } else if (hit.action == gui::ActBrowseDownloadDir) {
+                    host->pick_directory([&](const std::string& path) {
+                        if (!path.empty()) settingsFields[gui::FieldDownloadDir].text = path;
+                    });
+                } else if (hit.action >= gui::ActQualityBase && hit.action < gui::ActLanguageBase) {
+                    settingsCtl.mutable_settings().quality = gui::kQualityValues[hit.action - gui::ActQualityBase];
+                } else if (hit.action >= gui::ActLanguageBase && hit.action < gui::ActConcurrencyMinus) {
+                    settingsCtl.mutable_settings().language = gui::kLanguageValues[hit.action - gui::ActLanguageBase];
+                } else if (hit.action == gui::ActConcurrencyMinus) {
+                    auto& s = settingsCtl.mutable_settings();
+                    if (s.concurrency > 1) s.concurrency--;
+                } else if (hit.action == gui::ActConcurrencyPlus) {
+                    settingsCtl.mutable_settings().concurrency++;
+                } else if (hit.action == gui::ActRpmMinus) {
+                    auto& s = settingsCtl.mutable_settings();
+                    if (s.requests_per_minute > 0) s.requests_per_minute--;
+                } else if (hit.action == gui::ActRpmPlus) {
+                    settingsCtl.mutable_settings().requests_per_minute++;
+                } else if (hit.action == gui::ActSettingsSave) {
+                    settingsCtl.mutable_settings().download_dir = settingsFields[gui::FieldDownloadDir].text;
+                    settingsCtl.save();
+                } else if (hit.action >= gui::ActFieldFocusBase && hit.action < gui::ActFieldFocusBase + gui::FieldCount) {
+                    focusedField = hit.action - gui::ActFieldFocusBase;
+                }
             }
         }
-        // Enter submits the search regardless of pointer position.
-        if (input.keyWentDown(key::Enter)) {
-            searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
-            tableScrollPx = 0.0f;
-        }
-        widgets::textFieldHandleInput(queryField, input);
-        if (input.wheelDelta != 0.0f) {
-            Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
-            tableScrollPx += input.wheelDelta * rowH;
-            float maxScroll = std::max(0.0f, (float)searchCtl.results().size() * rowH - area.h * 0.5f);
-            tableScrollPx = std::clamp(tableScrollPx, 0.0f, maxScroll);
+
+        if (activeScreen == Screen::Search) {
+            // Enter submits the search regardless of pointer position.
+            if (input.keyWentDown(key::Enter)) {
+                searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
+                tableScrollPx = 0.0f;
+            }
+            widgets::textFieldHandleInput(queryField, input);
+            if (input.wheelDelta != 0.0f) {
+                Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
+                tableScrollPx += input.wheelDelta * rowH;
+                float maxScroll = std::max(0.0f, (float)searchCtl.results().size() * rowH - area.h * 0.5f);
+                tableScrollPx = std::clamp(tableScrollPx, 0.0f, maxScroll);
+            }
+        } else {
+            // Reload the account edit fields from the controller whenever
+            // the selected account changed (switching accounts must not
+            // clobber in-progress edits, but must pick up the new one).
+            if (settingsCtl.current_account_index() != loadedAccountIdx) {
+                // current_account() (not accounts()[index]) because it
+                // self-heals an empty account list (fresh install, no
+                // config.toml yet) by lazily creating a blank account —
+                // accounts() alone would still be empty here and indexing
+                // it with current_account_index()'s default of 0 crashes.
+                const config::Account& a = settingsCtl.current_account();
+                settingsFields[gui::FieldCountry].text = a.country;
+                settingsFields[gui::FieldEmail].text = a.email;
+                settingsFields[gui::FieldAppId].text = a.app_id;
+                settingsFields[gui::FieldAppSecret].text = a.app_secret;
+                settingsFields[gui::FieldUserId].text = a.user_id;
+                settingsFields[gui::FieldAuthToken].text = a.auth_token;
+                for (int fi = gui::FieldCountry; fi <= gui::FieldAuthToken; fi++)
+                    settingsFields[fi].cursorByte = settingsFields[fi].text.size();
+                loadedAccountIdx = settingsCtl.current_account_index();
+            }
+            if (focusedField >= 0) widgets::textFieldHandleInput(settingsFields[focusedField], input);
+            // Keep the account struct in sync with the edit fields every
+            // frame (not just on Save) so Login with Token always sees the
+            // latest typed app_id/app_secret/user_id/auth_token.
+            config::Account& a = settingsCtl.current_account();
+            a.country = settingsFields[gui::FieldCountry].text;
+            a.email = settingsFields[gui::FieldEmail].text;
+            a.app_id = settingsFields[gui::FieldAppId].text;
+            a.app_secret = settingsFields[gui::FieldAppSecret].text;
         }
 
         std::vector<float> curves;
@@ -393,11 +492,26 @@ int main(int argc, char** argv) {
             y += bh + h * 0.05f;
             theme::gradientRect(canvas, x, y, w * 0.9f, h * 0.04f, h * 0.02f);
         } else {
-            Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
             hits.clear();
-            gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/true,
-                             typePickerIndex, tableScrollPx, rowH,
-                             hoverRow, hoverHeaderCol, hits);
+
+            // Nav bar (always visible, both screens).
+            Rect navRow = {w * 0.04f, h * 0.02f, w * 0.2f, rowH};
+            int navIdx = activeScreen == Screen::Search ? 0 : 1;
+            widgets::drawSegmented(canvas, navRow, {"Search", "Settings"}, navIdx, theme::kSegmented);
+            auto navRects = widgets::segmentRects(navRow, 2);
+            hits.push_back({navRects[0], kActNavSearch});
+            hits.push_back({navRects[1], kActNavSettings});
+
+            Rect area = {w * 0.04f, navRow.y + navRow.h + h * 0.02f, w * 0.92f,
+                        h * 0.94f - navRow.h - h * 0.02f};
+            if (activeScreen == Screen::Search) {
+                gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/true,
+                                 typePickerIndex, tableScrollPx, rowH,
+                                 hoverRow, hoverHeaderCol, hits);
+            } else {
+                gui::draw_settings(canvas, area, settingsCtl, settingsFields, focusedField,
+                                   accountListHover, rowH, hits);
+            }
         }
 
         r.draw(curves, /*overlay_rotation_deg=*/0, /*images=*/{}, /*foregroundImages=*/{},

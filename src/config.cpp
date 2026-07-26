@@ -47,11 +47,12 @@ static fs::path default_download_dir() {
 #endif
 }
 
-Config load() {
+Config load() { return load(config_path()); }
+
+Config load(const fs::path &path) {
     Config cfg;
     cfg.settings.download_dir = default_download_dir();
 
-    fs::path path = config_path();
     if (!fs::exists(path)) return cfg;
 
     try {
@@ -106,8 +107,9 @@ static std::string toml_str(const std::string &s) {
     return r;
 }
 
-void save(const Config &cfg) {
-    fs::path path = config_path();
+void save(const Config &cfg) { save(cfg, config_path()); }
+
+void save(const Config &cfg, const fs::path &path) {
     fs::create_directories(path.parent_path());
 
     std::ostringstream out;
