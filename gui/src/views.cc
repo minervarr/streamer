@@ -196,7 +196,7 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
     // ── Left column: accounts ────────────────────────────────────────────────
     {
         float ly = leftCol.y;
-        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Accounts");
+        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Accounts", theme::kAccentLo);
         ly += rowH * 1.1f;
 
         std::vector<std::string> labels;
@@ -217,7 +217,7 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
         hits.push_back({delRect, ActRemoveAccount});
         ly += rowH + pad * 1.5f;
 
-        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Account details");
+        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Account details", theme::kAccentLo);
         ly += rowH * 1.1f;
 
         Rect row = {leftCol.x, ly, leftCol.w, rowH};
@@ -251,7 +251,7 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
     // ── Right column: global settings ───────────────────────────────────────
     {
         float ry = rightCol.y;
-        widgets::drawGroupHeader(c, {rightCol.x, ry, rightCol.w, rowH}, "Global Settings");
+        widgets::drawGroupHeader(c, {rightCol.x, ry, rightCol.w, rowH}, "Global Settings", theme::kAccentLo);
         ry += rowH * 1.1f;
 
         Rect qualityRow = {rightCol.x, ry, rightCol.w, rowH};
