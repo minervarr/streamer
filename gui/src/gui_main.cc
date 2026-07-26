@@ -260,6 +260,7 @@ int main(int argc, char** argv) {
     config::Config cfg = config::load();
     if (cfg.accounts.empty()) cfg.accounts.push_back({});
     const config::Account& account = cfg.accounts.front();
+    kb::api::set_requests_per_minute(cfg.settings.requests_per_minute);
 
     std::string msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
     init_fonts(host->assets(), msdf_cache);
@@ -392,6 +393,7 @@ int main(int argc, char** argv) {
                 } else if (hit.action == gui::ActSettingsSave) {
                     settingsCtl.mutable_settings().download_dir = settingsFields[gui::FieldDownloadDir].text;
                     settingsCtl.save();
+                    kb::api::set_requests_per_minute(settingsCtl.config().settings.requests_per_minute);
                 } else if (hit.action >= gui::ActFieldFocusBase && hit.action < gui::ActFieldFocusBase + gui::FieldCount) {
                     focusedField = hit.action - gui::ActFieldFocusBase;
                 }

@@ -83,6 +83,7 @@ int main(int argc, char **argv) {
 #endif
     config::Config cfg = config::load();
     i18n::init(cfg.settings.language);
+    kb::api::set_requests_per_minute(cfg.settings.requests_per_minute);
 
     CLI::App app{"streamer \xe2\x80\x94 Qobuz CLI downloader"};
     app.require_subcommand(1);
