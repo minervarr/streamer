@@ -25,7 +25,7 @@ cmake --build build --config Release
 
 This is a pure C++ project. The CLI binary (`streamer`) is built by `CMakeLists.txt` in the repo root.
 
-**External dependency**: `KawusapiCC/` (git submodule) — the C++ Qobuz API library (C++17).
+**External dependency**: `first_party/KawusapiCC/` (git submodule) — the C++ Qobuz API library (C++17). Structured `core/` (platform-agnostic, consumed here via `add_subdirectory`) + `platform/android/` (Gradle/NDK JNI build) + `scripts/` (standalone build entry points), matching `framework/Vk_Canvas_Lb_LAW`'s convention. Its own `engine/archive_engine` submodule (`ae_util`/`ae_net`/`ae_tag`) is structured the same way; `core/net` and `core/tag` link against this repo's vendored `third_party/curl`/`third_party/taglib` on desktop (must be `add_subdirectory`'d before KawusapiCC's `core/`) and cross-compile their own on Android.
 
 ### Source layout (`src/`)
 
@@ -51,12 +51,12 @@ Fields: `[settings]` (`download_dir`, `quality`, `requests_per_minute`, `concurr
 
 ### Kobuzapi++ internals
 
-- `kobuzapi/src/main/cpp/api/service.hh` — `kb::QobuzApiService`: central service class. `with_credentials(Config)` builds it; `login_with_token()` authenticates it.
-- `kobuzapi/src/main/cpp/download/download.hh` — `kb::download_track/album/playlist/artist` free functions.
-- `kobuzapi/src/main/cpp/core/models.hh` — all model structs (`Album`, `Artist`, `Track`, `Playlist`, `FileUrl`, …).
-- `kobuzapi/src/main/cpp/metadata/config.hh` — `kb::MetadataConfig` / `kb::MetadataField` for tag embedding.
-- `kobuzapi/src/main/cpp/api/requests.hh` — `kb::api::signed_get_raw` for raw signed API calls.
-- `engine/archive_engine/src/main/cpp/` — `ae_util`, `ae_net` (libcurl wrapper), `ae_tag` (TagLib wrapper).
+- `first_party/KawusapiCC/core/api/service.hh` — `kb::QobuzApiService`: central service class. `with_credentials(Config)` builds it; `login_with_token()` authenticates it.
+- `first_party/KawusapiCC/core/download/download.hh` — `kb::download_track/album/playlist/artist` free functions.
+- `first_party/KawusapiCC/core/core/models.hh` — all model structs (`Album`, `Artist`, `Track`, `Playlist`, `FileUrl`, …).
+- `first_party/KawusapiCC/core/metadata/config.hh` — `kb::MetadataConfig` / `kb::MetadataField` for tag embedding.
+- `first_party/KawusapiCC/core/api/requests.hh` — `kb::api::signed_get_raw` for raw signed API calls.
+- `first_party/KawusapiCC/engine/archive_engine/core/` — `ae_util`, `ae_net` (libcurl wrapper), `ae_tag` (TagLib wrapper).
 
 ### Quality values
 
