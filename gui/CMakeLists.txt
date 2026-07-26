@@ -57,6 +57,7 @@ add_executable(streamer_gui
     src/gui_main.cc
     src/query_dsl.cc
     src/search_controller.cc
+    src/views.cc
     ${_gui_host_sources}
 )
 add_dependencies(streamer_gui gui_shared_shaders gui_shaders)

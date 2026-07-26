@@ -11,12 +11,15 @@
 
 #include "query_dsl.hh"
 
+#include <api/service.hh>
+
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-namespace kb { class QobuzApiService; }
+namespace config { struct Account; }
 
 namespace search {
 
@@ -26,7 +29,13 @@ enum class SortColumn {
 
 class SearchController {
 public:
-    explicit SearchController(kb::QobuzApiService& svc) : svc_(svc) {}
+    // `account` may have empty app_id/app_secret (no account configured
+    // yet) — that's a normal state, not an error: has_service() reports it,
+    // and search() fails gracefully with last_error() rather than crashing
+    // or requiring a valid service to exist up front.
+    explicit SearchController(const config::Account& account);
+
+    bool has_service() const { return svc_.has_value(); }
 
     // Parses `query_text` (the DSL), extracts a base search term and a
     // type hint, calls the matching kb:: search endpoint(s), applies
@@ -59,7 +68,7 @@ public:
     uint64_t revision() const { return revision_; }
 
 private:
-    kb::QobuzApiService& svc_;
+    std::optional<kb::QobuzApiService> svc_;
     std::vector<query_dsl::SearchResult> results_;
     std::string last_error_;
     SortColumn sort_col_ = SortColumn::None;

@@ -34,6 +34,7 @@ inline constexpr widgets::StepperStyle kStepper{kPanel, kText, kTrack, kText};
 inline constexpr widgets::SliderStyle kSlider{kTrack, kAccentLo, kText, kDim};
 inline constexpr widgets::SegmentedStyle kSegmented{kAccentLo, kPanel, kBackground, kDim};
 inline constexpr widgets::DropdownStyle kDropdown{kText, kTrack, kPanel, kText, kDim};
+inline constexpr widgets::TextFieldStyle kTextField{kTrack, kText, kDim, kAccentLo};
 inline constexpr widgets::ScrollListStyle kScrollList{
     /*background=*/kPanel, /*rowText=*/kText, /*hoverBg=*/kTrack,
     /*selection=*/widgets::ListSelectionStyle::Pill,

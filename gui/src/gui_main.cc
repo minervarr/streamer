@@ -1,23 +1,36 @@
 // streamer GUI — portable skeleton. Owns the dirty-flag frame loop; the
 // per-OS AppHost (host.hh, os/wayland_host.cc today) owns windows/input pump.
 //
-// Phase 1: no controllers/screens yet — just proves the pipeline (window
-// opens, clears to black, closes cleanly). Later phases wire SearchController/
-// SettingsController and their views in here.
+// Search screen is the default mode: query text field -> SearchController,
+// sortable results table, cheatsheet panel, in-process download dispatch.
+// Click/hover dispatch follows the engine's established idiom (scanersito's
+// gui_main.cc): match the PREVIOUS frame's Hit rects against THIS frame's
+// pointer state, then draw fresh Hit rects for the next iteration — this
+// avoids needing draw() to return geometry before it has computed it.
 
+#include "config.hh"
+#include "download.hh"
 #include "host.hh"
 #include "query_dsl.hh"
+#include "search_controller.hh"
 #include "theme.hh"
+#include "views.hh"
 
 #include "canvas.hh"
+#include "font.hh"
 #include "frame_input.hh"
+#include "keys.hh"
+#include "msdf.hh"
 #include "widgets.hh"
+
+#include <api/service.hh>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -76,20 +89,54 @@ int run_selftest() {
          "ExtractTypeHint reads type: filter");
     check(ExtractTypeHint(Parse("sonza")).empty(), "ExtractTypeHint empty with no type: filter");
 
+    // ── Keystroke pipeline: CharEvent codepoint -> FrameInput -> the search
+    // box's actual text buffer. This is the path a real user's typing goes
+    // through — the previous assertions above prove Match/Parse handle
+    // accented strings correctly, but not that typing them in produces the
+    // same bytes. "Luísa Sonza" has both a 2-byte UTF-8 codepoint (í,
+    // U+00ED) and a plain-ASCII run, so this exercises the UTF-8-boundary-
+    // safe insert/backspace/cursor-move logic in textFieldHandleInput, not
+    // just an already-correct hardcoded std::string.
+    {
+        widgets::TextFieldState field;
+        FrameInput in;
+        auto type = [&](const std::u32string& s) {
+            in.beginFrame();
+            for (char32_t cp : s) in.onChar(CharEvent{(uint32_t)cp});
+            widgets::textFieldHandleInput(field, in);
+        };
+        type(U"Lu");
+        type(U"í");
+        type(U"sa Sonza");
+        check(field.text == "Luísa Sonza", "typed codepoints assemble to correct UTF-8 bytes");
+        check(field.cursorByte == field.text.size(), "cursor ends at the buffer's end");
+
+        // Backspace after 'í' must remove the whole 2-byte sequence, not one
+        // byte (which would leave a dangling continuation byte / mojibake).
+        widgets::TextFieldState field2;
+        auto type2 = [&](const std::u32string& s) {
+            in.beginFrame();
+            for (char32_t cp : s) in.onChar(CharEvent{(uint32_t)cp});
+            widgets::textFieldHandleInput(field2, in);
+        };
+        type2(U"Luí");
+        in.beginFrame();
+        in.onKey(KeyEvent{key::Backspace, true});
+        widgets::textFieldHandleInput(field2, in);
+        check(field2.text == "Lu", "backspace after an accented char removes the whole codepoint");
+        check(field2.cursorByte == 2, "cursor lands after 'u', not mid-codepoint");
+    }
+
     if (g_fail_count == 0) {
-        std::printf("selftest: ok (%d assertions)\n", 15);
+        std::printf("selftest: ok (%d assertions)\n", 19);
         return 0;
     }
     std::fprintf(stderr, "selftest: %d assertion(s) failed\n", g_fail_count);
     return 1;
 }
 
-} // namespace
+// ── Dev-only fake data for --widget-preview (Phase 4's sortable-table check) ─
 
-namespace {
-
-// Dev-only fake data for --widget-preview (Phase 4's sortable-table visual
-// check): the same 10 columns streamer-gui's ListView used.
 const std::vector<widgets::TableColumn>& previewColumns() {
     static const std::vector<widgets::TableColumn> cols = {
         {"Title", 2.2f}, {"Artist", 1.6f}, {"Label", 1.4f}, {"Date", 0.9f},
@@ -121,16 +168,84 @@ std::string previewCell(int row, int col) {
     }
 }
 
+// ── Fonts (same pipeline as scanersito's gui_main.cc) ────────────────────────
+
+Font     g_font;
+bool     g_font_ok = false;
+MsdfFont g_msdf;
+bool     g_msdf_ok = false;
+
+constexpr const char* kFontRegular = "fonts/NewCM10-Book.otf";
+constexpr const char* kFontBold    = "fonts/NewCM10-Bold.otf";
+constexpr const char* kFontItalic  = "fonts/NewCM10-BookItalic.otf";
+
+void init_fonts(AssetReader& assets, const std::string& cache) {
+    std::vector<uint8_t> bytes;
+    if (assets.read(kFontRegular, bytes))
+        g_font_ok = g_font.loadFromMemory(bytes.data(), bytes.size());
+
+    if (g_msdf.generate(assets, kFontRegular, cache.c_str())) {
+        bool added = false;
+        if (!g_msdf.hasStyle(FontStyle::Bold)) {
+            g_msdf.ensureAtlasLoaded(cache.c_str());
+            added |= g_msdf.addStyle(assets, kFontBold, FontStyle::Bold);
+        }
+        if (!g_msdf.hasStyle(FontStyle::Italic)) {
+            g_msdf.ensureAtlasLoaded(cache.c_str());
+            added |= g_msdf.addStyle(assets, kFontItalic, FontStyle::Italic);
+        }
+        if (added) g_msdf.saveCache(cache.c_str());
+        g_msdf_ok = g_msdf.valid();
+    }
+    if (!g_msdf_ok)
+        std::fprintf(stderr, "[!] MSDF unavailable — curve/stroke text only\n");
+}
+
+void upload_msdf(Renderer& r, const std::string& cache) {
+    if (!g_msdf_ok) return;
+    g_msdf.ensureAtlasLoaded(cache.c_str());
+    r.initMsdf(g_msdf);
+    g_msdf.releaseAtlasPixels();
+}
+
+// Fire-and-forget background download: mirrors the CLI's `streamer download`
+// dispatch (src/download.hh's dl::run), off the render thread so a slow
+// transfer never blocks the UI. No progress UI in this phase — a Downloads
+// screen is future work; this proves the in-process, no-subprocess wiring.
+void download_async(const config::Account& account, std::string quality,
+                    std::string download_dir, std::string country,
+                    std::vector<std::string> ids) {
+    std::thread([account, quality, download_dir, country, ids]() {
+        kb::QobuzApiService::Config cfg;
+        cfg.app_id = account.app_id;
+        cfg.app_secret = account.app_secret;
+        auto res = kb::QobuzApiService::with_credentials(cfg);
+        if (!res.ok()) {
+            std::fprintf(stderr, "[download] %s\n", res.error().message.c_str());
+            return;
+        }
+        auto svc = res.take();
+        if (!account.auth_token.empty())
+            svc.login_with_token(account.user_id, account.auth_token);
+        for (auto& id : ids) {
+            bool ok = dl::run(svc, id, quality, download_dir, country, 1, true, true);
+            std::fprintf(stderr, "[download] %s: %s\n", id.c_str(), ok ? "done" : "failed");
+        }
+    }).detach();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     bool theme_preview = false;
     bool widget_preview = false;
+    bool demo = false;
     const char* capture_path = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) return run_selftest();
         if (std::strcmp(argv[i], "--theme-preview") == 0) theme_preview = true;
         if (std::strcmp(argv[i], "--widget-preview") == 0) widget_preview = true;
+        if (std::strcmp(argv[i], "--demo") == 0) demo = true;
         if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) capture_path = argv[++i];
     }
 
@@ -140,47 +255,119 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    config::Config cfg = config::load();
+    if (cfg.accounts.empty()) cfg.accounts.push_back({});
+    const config::Account& account = cfg.accounts.front();
+
+    std::string msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
+    init_fonts(host->assets(), msdf_cache);
+    upload_msdf(host->renderer(), msdf_cache);
+
+    search::SearchController searchCtl(account);
+    widgets::TextFieldState queryField;
+    int typePickerIndex = 0;
+    float tableScrollPx = 0.0f;
+
+    if (demo) {
+        // Dev tooling only (visual verification, not shipped functionality):
+        // types an accented query through the real CharEvent->FrameInput->
+        // textFieldHandleInput pipeline, opens the cheatsheet, and submits a
+        // search — proving accented text survives end-to-end and the error
+        // path (no account configured in this environment) renders cleanly.
+        FrameInput synth;
+        synth.beginFrame();
+        for (char32_t cp : std::u32string(U"artist:\"Luísa Sonza\" year:2020-2024"))
+            synth.onChar(CharEvent{(uint32_t)cp});
+        widgets::textFieldHandleInput(queryField, synth);
+        searchCtl.toggle_cheatsheet();
+        searchCtl.search(queryField.text, "smart");
+    }
+
     FrameInput input;
     bool first_frame = true;
+    std::vector<gui::Hit> hits;  // filled by the PREVIOUS frame's draw
 
     while (!host->quit_requested()) {
         input.beginFrame();
         host->pump(/*timeout_ms=*/1000, input);
 
         bool dirty = host->take_dirty();
-        if (!dirty && !first_frame) continue;
+        bool interacted = input.pointerWentDown || input.wheelDelta != 0.0f ||
+                          !input.typedCodepoints.empty() || !input.keysWentDown.empty();
+        if (!dirty && !interacted && !first_frame) continue;
         first_frame = false;
 
         Renderer& r = host->renderer();
+        float w = (float)r.width(), h = (float)r.height();
+        float rowH = h * 0.045f;
+
+        // ── Dispatch against LAST frame's hits before drawing this frame ────
+        int hoverRow = -1, hoverHeaderCol = -1;
+        for (auto& hit : hits) {
+            if (!hit.rect.contains(input.pointerX, input.pointerY)) continue;
+            if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase)
+                hoverHeaderCol = hit.action - gui::ActTableHeaderBase;
+            else if (hit.action >= gui::ActTableRowBase)
+                hoverRow = hit.action - gui::ActTableRowBase;
+
+            if (!input.pointerWentDown) continue;
+            if (hit.action == gui::ActToggleCheatsheet) {
+                searchCtl.toggle_cheatsheet();
+            } else if (hit.action == gui::ActSubmitSearch) {
+                searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
+                tableScrollPx = 0.0f;
+            } else if (hit.action >= gui::ActTypePickerBase && hit.action < gui::ActTableHeaderBase) {
+                typePickerIndex = hit.action - gui::ActTypePickerBase;
+            } else if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase) {
+                auto sc = gui::sortColumnForTableIndex(hit.action - gui::ActTableHeaderBase);
+                if (sc != search::SortColumn::None) searchCtl.sort(sc);
+            } else if (hit.action >= gui::ActTableRowBase) {
+                searchCtl.toggle_selected(hit.action - gui::ActTableRowBase);
+            } else if (hit.action == gui::ActDownloadSelected && !searchCtl.selected().empty()) {
+                std::vector<std::string> ids;
+                for (int idx : searchCtl.selected()) ids.push_back(searchCtl.results()[(size_t)idx].id);
+                download_async(account, cfg.settings.quality, cfg.settings.download_dir.string(),
+                              account.country, ids);
+                searchCtl.clear_selection();
+            }
+        }
+        // Enter submits the search regardless of pointer position.
+        if (input.keyWentDown(key::Enter)) {
+            searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
+            tableScrollPx = 0.0f;
+        }
+        widgets::textFieldHandleInput(queryField, input);
+        if (input.wheelDelta != 0.0f) {
+            Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
+            tableScrollPx += input.wheelDelta * rowH;
+            float maxScroll = std::max(0.0f, (float)searchCtl.results().size() * rowH - area.h * 0.5f);
+            tableScrollPx = std::clamp(tableScrollPx, 0.0f, maxScroll);
+        }
+
         std::vector<float> curves;
         std::vector<float> shapeVerts;
-        Canvas canvas(curves, r.width(), r.height(), /*font=*/nullptr,
+        std::vector<float> msdfQuads;
+        Canvas canvas(curves, r.width(), r.height(), g_font_ok ? &g_font : nullptr,
                       /*insetTop=*/0, /*insetBottom=*/0,
                       /*insetLeft=*/0, /*insetRight=*/0);
         canvas.useShapes(&shapeVerts);
+        if (g_msdf_ok) canvas.useMsdf(&g_msdf, &msdfQuads);
         canvas.clear(theme::kBackground);
 
         if (widget_preview) {
-            // Visual + interaction check for Phase 4: click a header cell to
-            // sort by that column (toggling direction on repeated clicks),
-            // scroll the body, confirm hover highlighting and the
-            // sort-direction glyph render correctly.
-            static int sortCol = 1;  // Artist, ascending — visible without interaction
+            static int sortCol = 1;
             static bool sortAsc = true;
             static float scrollPx = 0.0f;
             const auto& cols = previewColumns();
             const int rowCount = 24;
-
-            float w = (float)r.width(), h = (float)r.height();
             Rect area = {w * 0.05f, h * 0.08f, w * 0.9f, h * 0.8f};
-            float rowH = h * 0.05f;
-
-            Rect header = widgets::tableHeaderRow(area, rowH);
+            float prowH = h * 0.05f;
+            Rect header = widgets::tableHeaderRow(area, prowH);
             auto headerRects = widgets::tableHeaderColumnRects(header, cols);
-            int hoverHeaderCol = -1;
+            int hHover = -1;
             for (size_t i = 0; i < headerRects.size(); i++) {
                 if (headerRects[i].contains(input.pointerX, input.pointerY)) {
-                    hoverHeaderCol = (int)i;
+                    hHover = (int)i;
                     if (input.pointerWentDown) {
                         if (sortCol == (int)i) sortAsc = !sortAsc;
                         else { sortCol = (int)i; sortAsc = true; }
@@ -188,44 +375,37 @@ int main(int argc, char** argv) {
                 }
             }
             if (input.wheelDelta != 0.0f) {
-                scrollPx += input.wheelDelta * rowH;
-                float maxScroll = std::max(0.0f, rowCount * rowH - (area.h - rowH));
-                if (scrollPx < 0.0f) scrollPx = 0.0f;
-                if (scrollPx > maxScroll) scrollPx = maxScroll;
+                scrollPx += input.wheelDelta * prowH;
+                float maxScroll = std::max(0.0f, rowCount * prowH - (area.h - prowH));
+                scrollPx = std::clamp(scrollPx, 0.0f, maxScroll);
             }
-
-            int hoverRow = -1;
-            Rect body = {area.x, area.y + rowH, area.w, area.h - rowH};
+            int rHover = -1;
+            Rect body = {area.x, area.y + prowH, area.w, area.h - prowH};
             if (body.contains(input.pointerX, input.pointerY))
-                hoverRow = (int)((input.pointerY - body.y + scrollPx) / rowH);
-
+                rHover = (int)((input.pointerY - body.y + scrollPx) / prowH);
             widgets::drawSortableTable(canvas, area, cols, previewCell, rowCount,
-                                       sortCol, sortAsc, scrollPx, rowH,
-                                       hoverRow, hoverHeaderCol);
-        }
-
-        if (theme_preview) {
-            // Visual check for Phase 2: a row of gradient buttons/bars at
-            // different slices of the accent gradient, plus the shared
-            // toggle/stepper/slider/segmented/dropdown styles.
-            float w = (float)r.width(), h = (float)r.height();
+                                       sortCol, sortAsc, scrollPx, prowH, rHover, hHover);
+        } else if (theme_preview) {
             float bw = w * 0.18f, bh = h * 0.08f, gap = w * 0.02f;
             float x = w * 0.05f, y = h * 0.08f;
-            for (int i = 0; i < 4; ++i) {
-                theme::accentButton(canvas, x + i * (bw + gap), y, bw, bh,
-                                    "Button", bh * 0.25f);
-            }
+            for (int i = 0; i < 4; ++i)
+                theme::accentButton(canvas, x + i * (bw + gap), y, bw, bh, "Button", bh * 0.25f);
             y += bh + h * 0.05f;
             theme::gradientRect(canvas, x, y, w * 0.9f, h * 0.04f, h * 0.02f);
+        } else {
+            Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
+            hits.clear();
+            gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/true,
+                             typePickerIndex, tableScrollPx, rowH,
+                             hoverRow, hoverHeaderCol, hits);
         }
 
         r.draw(curves, /*overlay_rotation_deg=*/0, /*images=*/{}, /*foregroundImages=*/{},
-              /*msdfQuads=*/{}, shapeVerts);
+              msdfQuads, shapeVerts);
 
         if (capture_path) {
-            // Dev tooling only (Phase 2 gradient visual check): dump the
-            // frame just drawn as raw RGBA8 next to a .txt sidecar with its
-            // dimensions, since this repo has no PNG encoder wired in yet.
+            // Dev tooling only: dump the frame just drawn as raw RGBA8 —
+            // this repo has no PNG encoder wired in yet, ffmpeg converts it.
             std::vector<uint8_t> rgba;
             uint32_t cw = 0, ch = 0;
             if (r.readbackLastFrame(rgba, cw, ch)) {

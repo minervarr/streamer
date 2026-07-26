@@ -1,12 +1,25 @@
 #include "search_controller.hh"
 
-#include <api/service.hh>
+#include "config.hh"
+
 #include <core/models.hh>
 
 #include <algorithm>
 #include <cctype>
 
 namespace search {
+
+SearchController::SearchController(const config::Account& account) {
+    kb::QobuzApiService::Config cfg;
+    cfg.app_id = account.app_id;
+    cfg.app_secret = account.app_secret;
+    auto res = kb::QobuzApiService::with_credentials(cfg);
+    if (res.ok()) {
+        svc_ = res.take();
+        if (!account.auth_token.empty())
+            svc_->login_with_token(account.user_id, account.auth_token);
+    }
+}
 
 namespace {
 
@@ -90,6 +103,12 @@ bool SearchController::search(const std::string& query_text, const std::string& 
     results_.clear();
     clear_selection();
 
+    if (!svc_) {
+        last_error_ = "No account configured (set app_id/app_secret, then run login).";
+        ++revision_;
+        return false;
+    }
+
     query_dsl::QueryNode ast = query_dsl::Parse(query_text);
     std::string base_term = query_dsl::ExtractBaseTerm(ast);
     if (base_term.empty()) base_term = query_text; // no filters — search the raw text
@@ -104,28 +123,28 @@ bool SearchController::search(const std::string& query_text, const std::string& 
     std::string combined_error;
 
     auto run_tracks = [&]() {
-        auto res = svc_.search_tracks(base_term, limit, {});
+        auto res = svc_->search_tracks(base_term, limit, {});
         if (!res.ok()) { combined_error += res.error().message + " "; return; }
         any_ok = true;
         for (auto& t : res.value().items.value_or({}))
             if (t) results_.push_back(FromTrack(*t));
     };
     auto run_albums = [&]() {
-        auto res = svc_.search_albums(base_term, limit, {});
+        auto res = svc_->search_albums(base_term, limit, {});
         if (!res.ok()) { combined_error += res.error().message + " "; return; }
         any_ok = true;
         for (auto& a : res.value().items.value_or({}))
             if (a) results_.push_back(FromAlbum(*a));
     };
     auto run_artists = [&]() {
-        auto res = svc_.search_artists(base_term, limit, {});
+        auto res = svc_->search_artists(base_term, limit, {});
         if (!res.ok()) { combined_error += res.error().message + " "; return; }
         any_ok = true;
         for (auto& a : res.value().items.value_or({}))
             if (a) results_.push_back(FromArtist(*a));
     };
     auto run_playlists = [&]() {
-        auto res = svc_.search_playlists(base_term, limit, {});
+        auto res = svc_->search_playlists(base_term, limit, {});
         if (!res.ok()) { combined_error += res.error().message + " "; return; }
         any_ok = true;
         for (auto& p : res.value().items.value_or({}))
