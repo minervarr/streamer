@@ -89,15 +89,40 @@ std::u32string ToLowerStr(const std::u32string& s) {
     return out;
 }
 
+// Diacritic stripping for search matching only (never for display/storage):
+// a US/ASCII keyboard has no way to type "í", so a bare "luisa" must still
+// find "Luísa" — case-folding alone isn't enough since 'í' != 'i' even
+// lowercased. Input is expected already lowercased by ToLowerCp, so only
+// the lowercase accented forms need mapping here.
+char32_t StripAccentCp(char32_t c) {
+    switch (c) {
+        case U'à': case U'á': case U'â': case U'ã': case U'ä': case U'å': return U'a';
+        case U'è': case U'é': case U'ê': case U'ë':                     return U'e';
+        case U'ì': case U'í': case U'î': case U'ï':                     return U'i';
+        case U'ò': case U'ó': case U'ô': case U'õ': case U'ö':          return U'o';
+        case U'ù': case U'ú': case U'û': case U'ü':                     return U'u';
+        case U'ý': case U'ÿ':                                            return U'y';
+        case U'ñ':                                                       return U'n';
+        case U'ç':                                                       return U'c';
+        default: return c;
+    }
+}
+
+std::u32string FoldForSearch(const std::u32string& s) {
+    std::u32string out(s);
+    for (auto& c : out) c = StripAccentCp(ToLowerCp(c));
+    return out;
+}
+
 bool ContainsI(const std::string& haystack, const std::string& needle) {
     if (needle.empty()) return true;
-    std::u32string h = ToLowerStr(Utf8Decode(haystack));
-    std::u32string n = ToLowerStr(Utf8Decode(needle));
+    std::u32string h = FoldForSearch(Utf8Decode(haystack));
+    std::u32string n = FoldForSearch(Utf8Decode(needle));
     return h.find(n) != std::u32string::npos;
 }
 
 bool EqualsI(const std::string& a, const std::string& b) {
-    return ToLowerStr(Utf8Decode(a)) == ToLowerStr(Utf8Decode(b));
+    return FoldForSearch(Utf8Decode(a)) == FoldForSearch(Utf8Decode(b));
 }
 
 // ── Field / value normalization (ES -> EN, mirrors QueryParser.cpp) ───────
@@ -357,21 +382,31 @@ bool MatchFilter(const FilterNode& f, const SearchResult& r) {
     return numField == cmp; // ":" for numeric — exact match
 }
 
-void CollectTerms(const QueryNode& node, std::vector<std::string>& out) {
+// Filter-derived values (artist:/title:/album:) go in `filterTerms`, bare
+// keywords in `bareTerms` — kept separate so ExtractBaseTerm can prefer the
+// former. An unquoted multi-word filter value like `artist:=Poppy Ajudha`
+// parses (by grammar design — see this file's header) as
+// `artist:=Poppy AND Ajudha`, i.e. a filter value "Poppy" plus a leftover
+// bare term "Ajudha". Ranking every term by length alone, as before, let
+// that trailing bare word outrank the actual filter value whenever it
+// happened to be longer, sending the remote search off on a completely
+// unrelated term.
+void CollectTerms(const QueryNode& node, std::vector<std::string>& filterTerms,
+                  std::vector<std::string>& bareTerms) {
     switch (node.kind) {
     case NodeKind::Term:
-        if (!node.term.empty()) out.push_back(node.term);
+        if (!node.term.empty()) bareTerms.push_back(node.term);
         break;
     case NodeKind::Filter: {
         const auto& f = node.filter.field;
         if ((f == "artist" || f == "title" || f == "album") && !node.filter.value.empty())
-            out.push_back(node.filter.value);
+            filterTerms.push_back(node.filter.value);
         break;
     }
     case NodeKind::And:
     case NodeKind::Or:
-        if (node.left)  CollectTerms(*node.left,  out);
-        if (node.right) CollectTerms(*node.right, out);
+        if (node.left)  CollectTerms(*node.left,  filterTerms, bareTerms);
+        if (node.right) CollectTerms(*node.right, filterTerms, bareTerms);
         break;
     case NodeKind::Not:
         break; // don't use negated terms as the search base
@@ -418,8 +453,11 @@ bool Match(const QueryNode& node, const SearchResult& r) {
 }
 
 std::string ExtractBaseTerm(const QueryNode& node) {
-    std::vector<std::string> terms;
-    CollectTerms(node, terms);
+    std::vector<std::string> filterTerms, bareTerms;
+    CollectTerms(node, filterTerms, bareTerms);
+    // A field-scoped value is a much stronger signal than an incidental
+    // bare word beside it — prefer it whenever one exists.
+    std::vector<std::string>& terms = !filterTerms.empty() ? filterTerms : bareTerms;
     if (terms.empty()) return "";
     return *std::max_element(terms.begin(), terms.end(),
         [](const std::string& a, const std::string& b) { return a.size() < b.size(); });

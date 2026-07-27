@@ -69,6 +69,14 @@ int run_selftest() {
     check(Match(Parse("LUÍSA"), luisa), "uppercase accented 'LUÍSA' folds to match 'Luísa'");
     check(!Match(Parse("Shakira"), luisa), "unrelated term does not match");
 
+    // Diacritic-insensitive matching: a US/ASCII keyboard has no way to type
+    // "í", so an unaccented "luisa sonza" must still find "Luísa Sonza".
+    check(Match(Parse("Luisa Sonza"), luisa), "unaccented 'Luisa Sonza' matches accented 'Luísa Sonza'");
+    check(Match(Parse("luisa"), luisa), "unaccented lowercase 'luisa' matches 'Luísa'");
+    check(Match(Parse("artist:=Luisa Sonza"), luisa) == false,
+         "artist:=Luisa Sonza (exact, unquoted) still splits into two terms — quoting note applies regardless of accents");
+    check(Match(Parse("artist:=\"Luisa Sonza\""), luisa), "artist:=\"Luisa Sonza\" (exact, quoted, unaccented) matches accented 'Luísa Sonza'");
+
     // Quoted filter value, accent preserved.
     check(Match(Parse("artist:\"Luísa Sonza\""), luisa), "artist:\"Luísa Sonza\" matches");
     check(!Match(Parse("artist:\"Anitta\""), luisa), "artist:\"Anitta\" does not match");

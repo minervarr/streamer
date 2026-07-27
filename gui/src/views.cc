@@ -152,6 +152,7 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
             "Operators:  field:value (contains)   field:=value (exact)   field:>N  field:<N  field:>=N  field:<=N (numeric)   field:N-M (range)",
             "Boolean:  space = AND   or / \"or\" = OR   not / \"!\" = NOT   ( ) for grouping",
             "Examples:  artist:\"Luísa Sonza\" year:2020-2024   duration:>3m hires:true   not explicit:true",
+            "Multi-word values need quotes:  artist:=\"Poppy Ajudha\" (exact)   NOT artist:=Poppy Ajudha (splits into two terms)",
         };
         for (const char* line : lines) {
             c.text(line, lx, ly, ls, theme::kText);
