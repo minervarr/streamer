@@ -68,8 +68,15 @@ const char *t(const char *key) {
                          "Listar álbumes o pistas del catálogo");
     T("cmd_lib_resolve", "Show the real names behind an album id, track id, or file path",
                          "Mostrar los nombres reales de un id de álbum, id de pista o ruta");
+    T("cmd_lib_scan",    "Make the catalog match what is actually on disk",
+                         "Hacer que el catálogo coincida con lo que hay en el disco");
     T("lib_empty",       "Nothing catalogued yet in",
                          "Todavía no hay nada catalogado en");
+    T("lib_catalog_lost",
+        "This folder has music but the catalog is empty — run 'streamer library scan' to rebuild it.",
+        "Esta carpeta tiene música pero el catálogo está vacío — ejecuta 'streamer library scan' para reconstruirlo.");
+    T("lib_scan_dry",    "Dry run — nothing was written.",
+                         "Simulación — no se escribió nada.");
     T("lib_not_found",   "Not in the catalog:",
                          "No está en el catálogo:");
     T("cmd_refresh_credentials",

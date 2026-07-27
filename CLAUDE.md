@@ -63,6 +63,16 @@ The real, byte-exact names and the release metadata live in `library.db`, versio
 `PRAGMA user_version`. Start from the `view_library` view. `streamer library resolve <album-id
 | track-id | path>` maps any ID back to its names.
 
+The catalog is written on download and **never watches the filesystem**, so files deleted
+out of band leave stale rows. `streamer library scan` reconciles: prunes rows whose file is
+gone, adopts unknown files (re-fetching album metadata by the ID in the path), re-registers
+assets. It is also the rebuild path — losing `library.db` costs nothing permanent, since the
+directory and file names are the Qobuz IDs. `--dry-run` and `--offline` available.
+
+Large files are fetched over parallel byte ranges (`ae::HttpClient::Options::max_segments`,
+4 for the CDN client) because Qobuz throttles per connection; a process-wide semaphore caps
+total transfer sockets at 16 since track concurrency and segment count multiply.
+
 ### Config
 
 Config lives at:

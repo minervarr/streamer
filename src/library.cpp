@@ -1,8 +1,12 @@
 #include "library.hh"
 
+#include "download.hh"
+
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <map>
+#include <set>
 #include <stdexcept>
 
 #include <sqlite3.h>
@@ -219,6 +223,38 @@ std::optional<int64_t> track_id_from_path(const std::string &path) {
     } catch (...) {
         return std::nullopt;
     }
+}
+
+// "327841514.27.flac" -> 27. 0 when the name is not ours.
+int format_id_from_path(const std::string &path) {
+    std::string stem = fs::u8path(path).filename().u8string();
+    size_t first = stem.find('.');
+    if (first == std::string::npos) return 0;
+    size_t second = stem.find('.', first + 1);
+    if (second == std::string::npos) return 0;
+    try {
+        return std::stoi(stem.substr(first + 1, second - first - 1));
+    } catch (...) {
+        return 0;
+    }
+}
+
+// The sidecar files extras::save_* produce, and the asset kind each maps to.
+const char *asset_kind_for(const std::string &filename) {
+    if (filename == "cover.jpg")             return "cover";
+    if (filename == "booklet.pdf")           return "booklet";
+    if (filename == "album_description.txt") return "description";
+    if (filename == "artist.jpg")            return "artist_image";
+    if (filename == "artist_bio.txt")        return "artist_bio";
+    return nullptr;
+}
+
+// "FR/<album_id>/<file>" -> "FR". Empty when there is no country tier.
+std::string country_from_rel(const std::string &rel) {
+    size_t first = rel.find('/');
+    if (first == std::string::npos) return {};
+    if (rel.find('/', first + 1) == std::string::npos) return {};
+    return rel.substr(0, first);
 }
 
 const std::string *artist_name_of(const kb::Artist *a) {
@@ -608,6 +644,239 @@ std::vector<AlbumEntry> list_albums(const std::string &root, uint32_t limit) {
         while (s.step()) out.push_back(row_to_album(s.st));
     });
     return out;
+}
+
+bool catalog_looks_lost(const std::string &root) {
+    bool has_albums_on_disk = false;
+    std::error_code ec;
+    for (const auto &entry : fs::directory_iterator(fs::u8path(root), ec)) {
+        if (!entry.is_directory(ec)) continue;
+        std::string name = entry.path().filename().u8string();
+        if (name == ".streamer") continue;
+        // Either a country tier or an album directory; both mean content.
+        has_albums_on_disk = true;
+        break;
+    }
+    if (!has_albums_on_disk) return false;
+
+    bool catalog_empty = true;
+    guarded("probe catalog", [&] {
+        Db db(db_path(root));
+        Stmt s(db.db, "SELECT COUNT(*) FROM files");
+        if (s.step()) catalog_empty = sqlite3_column_int(s.st, 0) == 0;
+    });
+    return catalog_empty;
+}
+
+ScanReport scan(const std::string &root, const AlbumFetcher &fetch_album, bool dry_run) {
+    ScanReport report;
+    guarded("scan", [&] {
+        Db db(db_path(root));
+
+        // Everything the catalog currently claims, so anything left over at
+        // the end is a row whose file has gone.
+        std::map<std::string, int64_t> claimed;   // rel_path -> track_id
+        {
+            Stmt s(db.db, "SELECT rel_path, track_id, bytes FROM files");
+            while (s.step()) claimed.emplace(col_text(s.st, 0), sqlite3_column_int64(s.st, 1));
+        }
+        std::map<std::string, int64_t> recorded_bytes;
+        {
+            Stmt s(db.db, "SELECT rel_path, IFNULL(bytes,-1) FROM files");
+            while (s.step()) recorded_bytes.emplace(col_text(s.st, 0), sqlite3_column_int64(s.st, 1));
+        }
+
+        std::set<int64_t> known_tracks;
+        {
+            Stmt s(db.db, "SELECT id FROM tracks");
+            while (s.step()) known_tracks.insert(sqlite3_column_int64(s.st, 0));
+        }
+
+        std::map<std::string, std::optional<kb::Album>> fetched;   // album_id -> metadata
+        struct PendingAsset {
+            std::string abs_path;
+            std::string album_id;   // empty for artist assets
+            int artist_id;          // 0 for album assets
+        };
+        std::vector<PendingAsset> pending_assets;
+
+        int64_t now = now_seconds();
+        Transaction tx(db.db);
+
+        std::error_code ec;
+        fs::recursive_directory_iterator it(fs::u8path(root),
+                                            fs::directory_options::skip_permission_denied, ec);
+        if (ec) return;
+        for (fs::recursive_directory_iterator end; it != end; it.increment(ec)) {
+            if (ec) break;
+            if (it->is_directory(ec)) {
+                if (it->path().filename().u8string() == ".streamer") it.disable_recursion_pending();
+                continue;
+            }
+            if (!it->is_regular_file(ec)) continue;
+
+            std::string abs = it->path().u8string();
+            std::string rel = relative_to(root, abs);
+            ++report.files_seen;
+
+            auto tid = track_id_from_path(abs);
+            std::string album_id = it->path().parent_path().filename().u8string();
+            if (!tid) {
+                // Assets carry a foreign key onto albums, so they cannot be
+                // written until every album row exists — deferred to a second
+                // pass rather than relying on directory iteration order.
+                if (asset_kind_for(it->path().filename().u8string())) {
+                    pending_assets.push_back({abs, album_id, 0});
+                } else {
+                    ++report.unknown;
+                }
+                continue;
+            }
+
+            auto existing = claimed.find(rel);
+            if (existing != claimed.end()) {
+                int64_t on_disk = static_cast<int64_t>(fs::file_size(it->path(), ec));
+                auto was = recorded_bytes.find(rel);
+                if (!ec && was != recorded_bytes.end() && was->second != on_disk) {
+                    if (!dry_run) {
+                        upsert_file(db.db, root, *tid, abs,
+                                    dl::format_id_to_quality(format_id_from_path(abs)),
+                                    format_id_from_path(abs), country_from_rel(rel), now);
+                    }
+                    ++report.updated;
+                }
+                claimed.erase(existing);
+                continue;
+            }
+
+            // Not in the catalog. Adopt it, re-fetching the album's metadata
+            // when the catalog has never seen this track — which is exactly
+            // the case after .streamer/ was deleted.
+            if (known_tracks.find(*tid) == known_tracks.end()) {
+                if (!fetch_album) {
+                    ++report.unknown;
+                    continue;
+                }
+                auto cached = fetched.find(album_id);
+                if (cached == fetched.end()) {
+                    cached = fetched.emplace(album_id, fetch_album(album_id)).first;
+                    if (cached->second) ++report.fetched;
+                }
+                if (!cached->second) {
+                    ++report.unknown;
+                    continue;
+                }
+                if (!dry_run) {
+                    upsert_album(db.db, *cached->second, now);
+                    if (cached->second->tracks && cached->second->tracks->items) {
+                        for (const auto &t : *cached->second->tracks->items) {
+                            if (t && t->id) {
+                                upsert_track(db.db, *t, album_id, now);
+                                known_tracks.insert(*t->id);
+                            }
+                        }
+                    }
+                }
+            }
+            if (!dry_run) {
+                upsert_file(db.db, root, *tid, abs,
+                            dl::format_id_to_quality(format_id_from_path(abs)),
+                            format_id_from_path(abs), country_from_rel(rel), now);
+            }
+            ++report.adopted;
+        }
+
+        // Artist assets live under .streamer/artists/<artist_id>/, which the
+        // walk above deliberately skips, so collect them separately.
+        {
+            fs::path artists_dir = fs::u8path(root) / ".streamer" / "artists";
+            std::error_code aec;
+            for (const auto &dir : fs::directory_iterator(artists_dir, aec)) {
+                if (aec) break;
+                if (!dir.is_directory(aec)) continue;
+                int artist_id = 0;
+                try {
+                    artist_id = std::stoi(dir.path().filename().u8string());
+                } catch (...) {
+                    continue;
+                }
+                for (const auto &f : fs::directory_iterator(dir.path(), aec)) {
+                    if (aec) break;
+                    if (!f.is_regular_file(aec)) continue;
+                    if (asset_kind_for(f.path().filename().u8string())) {
+                        pending_assets.push_back({f.path().u8string(), {}, artist_id});
+                    }
+                }
+            }
+        }
+
+        // Second pass: every album row now exists, so the FK will hold.
+        for (const auto &asset : pending_assets) {
+            const char *kind = asset_kind_for(fs::u8path(asset.abs_path).filename().u8string());
+            if (!kind) continue;
+            // Both columns are foreign keys; inserting against a row that is
+            // not there throws and would abort the whole scan.
+            bool owner_known = false;
+            if (!asset.album_id.empty()) {
+                Stmt s(db.db, "SELECT 1 FROM albums WHERE id=?");
+                s.bind(asset.album_id);
+                owner_known = s.step();
+            } else if (asset.artist_id != 0) {
+                Stmt s(db.db, "SELECT 1 FROM artists WHERE id=?");
+                s.bind(static_cast<int64_t>(asset.artist_id));
+                owner_known = s.step();
+            }
+            if (!owner_known) {
+                ++report.unknown;   // orphan sidecar we cannot attach to anything
+                continue;
+            }
+            if (!dry_run) {
+                std::error_code sec;
+                auto size = fs::file_size(fs::u8path(asset.abs_path), sec);
+                Stmt s(db.db,
+                    "INSERT INTO assets (kind,album_id,artist_id,rel_path,bytes) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(rel_path) DO UPDATE SET "
+                    "kind=excluded.kind, bytes=excluded.bytes");
+                s.bind(std::string(kind));
+                if (asset.album_id.empty()) s.bind_null(); else s.bind(asset.album_id);
+                if (asset.artist_id == 0) s.bind_null();
+                else s.bind(static_cast<int64_t>(asset.artist_id));
+                s.bind(relative_to(root, asset.abs_path));
+                if (sec) s.bind_null(); else s.bind(static_cast<int64_t>(size));
+                s.run();
+            }
+            ++report.assets;
+        }
+
+        // Whatever the catalog still claims was never found on disk.
+        for (const auto &[rel, track_id] : claimed) {
+            if (!dry_run) {
+                Stmt s(db.db, "DELETE FROM files WHERE rel_path=?");
+                s.bind(rel);
+                s.run();
+            }
+            ++report.removed;
+        }
+        // Cover art, booklets and artist images go stale the same way.
+        // Collected first, then deleted — do not mutate a table mid-SELECT.
+        std::vector<std::string> stale_assets;
+        {
+            Stmt s(db.db, "SELECT rel_path FROM assets");
+            while (s.step()) {
+                std::string rel = col_text(s.st, 0);
+                if (!fs::exists(fs::u8path(root) / fs::u8path(rel))) stale_assets.push_back(rel);
+            }
+        }
+        for (const auto &rel : stale_assets) {
+            if (!dry_run) {
+                Stmt s(db.db, "DELETE FROM assets WHERE rel_path=?");
+                s.bind(rel);
+                s.run();
+            }
+            ++report.removed;
+        }
+    });
+    return report;
 }
 
 std::vector<Entry> list_tracks(const std::string &root, uint32_t limit) {

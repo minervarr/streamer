@@ -15,6 +15,7 @@
 // columns can arrive as ordered migrations.
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -81,5 +82,31 @@ std::optional<Resolution> resolve(const std::string &root, const std::string &ke
 
 std::vector<AlbumEntry> list_albums(const std::string &root, uint32_t limit);
 std::vector<Entry>      list_tracks(const std::string &root, uint32_t limit);
+
+// True when the tree holds album directories but the catalog knows nothing —
+// i.e. .streamer/library.db was lost. Distinguishes "empty library" from
+// "library whose catalog needs rebuilding", which look identical otherwise.
+bool catalog_looks_lost(const std::string &root);
+
+struct ScanReport {
+    int files_seen = 0;
+    int removed    = 0;   // rows whose file is no longer on disk
+    int adopted    = 0;   // files on disk the catalog did not know about
+    int updated    = 0;   // rows whose recorded size no longer matched
+    int assets     = 0;   // cover art / booklets / artist images re-registered
+    int unknown    = 0;   // files whose name is not the ID-addressed pattern
+    int fetched    = 0;   // albums whose metadata had to be re-fetched
+};
+
+// Supplies album metadata for an album id found on disk but missing from the
+// catalog. May be null, in which case such files are counted as unknown
+// rather than adopted — that is the difference between an offline scan and one
+// that can rebuild a lost catalog from the network.
+using AlbumFetcher = std::function<std::optional<kb::Album>(const std::string &album_id)>;
+
+// Reconciles the catalog with what is actually in `root`. Nothing here talks
+// to the filesystem during normal downloads, so this is the only thing that
+// notices files deleted behind the app's back.
+ScanReport scan(const std::string &root, const AlbumFetcher &fetch_album, bool dry_run);
 
 } // namespace library

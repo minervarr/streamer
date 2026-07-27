@@ -57,7 +57,7 @@
 \begin{center}
 {\fontsize{28}{34}\selectfont\bfseries\color{accent} Streamer}\\[6pt]
 {\large Qobuz Music Downloader --- User Manual}\\[4pt]
-{\small Version 0.2 --- June 2026}
+{\small Version 0.3 --- July 2026}
 \end{center}
 
 \vspace{1em}
@@ -403,18 +403,44 @@ them at once.
 
 \begin{cmdbox}
 Music/\\
-  US/\\
-~~~~Artist Name/\\
-~~~~~~~~Album Title/\\
-~~~~~~~~~~~~01. Track Title.flac\\
-~~~~~~~~~~~~02. Track Title.flac\\
-~~~~~~~~~~~~...\\
-~~~~~~~~~~~~cover.jpg\\
-~~~~~~~~~~~~album\_description.txt~~(if available)\\
-~~~~~~~~~~~~booklet.pdf~~~~~~~~~~~~~(if available)\\
-~~~~artist\_bio.txt~~~~~~~~~~~~~~~~~~(if available)\\
-~~~~artist.jpg~~~~~~~~~~~~~~~~~~~~~~(if available)
+~~US/\\
+~~~~i846oxcvfim0a/~~~~~~~~~~~~~~~~~~~(album ID)\\
+~~~~~~~~327841514.27.flac~~~~~~~~~~~~(track ID . quality)\\
+~~~~~~~~327841515.27.flac\\
+~~~~~~~~...\\
+~~~~~~~~cover.jpg\\
+~~~~~~~~album\_description.txt~~~~~~~~(if available)\\
+~~~~~~~~booklet.pdf~~~~~~~~~~~~~~~~~~(if available)\\
+~~.streamer/\\
+~~~~library.db~~~~~~~~~~~~~~~~~~~~~~~(the catalog --- see Section 7)\\
+~~~~artists/83085/artist.jpg~~~~~~~~~(if available)\\
+~~~~artists/83085/artist\_bio.txt~~~~~(if available)
 \end{cmdbox}
+
+Folders and files are named by \textbf{Qobuz ID}, not by artist and title.
+This looks odd at first, so here is why.
+
+Windows, SD cards and USB sticks all forbid the characters
+\texttt{< > : " | ? *} in file names.  An album genuinely called
+\emph{F*CK U SKRILLEX YOU THINK UR ANDY WARHOL BUT UR NOT!! <3} therefore
+cannot be written to disk under its real name --- it used to become
+\emph{F\_CK U SKRILLEX \ldots\ \_3}, with the title quietly damaged.  Titles
+also change: when Qobuz corrects a typo, a name-based folder would move and
+every path you had saved would break.
+
+So Streamer stores the audio under IDs, which are safe everywhere and never
+change, and keeps the real, unaltered names in the catalog database.
+
+\begin{tipbox}
+To find out what a folder or file actually is, ask:
+
+\medskip
+{\ttfamily streamer.exe library resolve i846oxcvfim0a}
+\end{tipbox}
+
+The two numbers in \texttt{327841514.27.flac} are the track ID and the quality
+(27 = 24-bit/192\,kHz).  The quality is part of the name so you can keep the
+same track at two qualities side by side without one overwriting the other.
 
 If you have only one account with no country set, the country subfolder
 (\texttt{US/}) is omitted.
@@ -447,7 +473,7 @@ streamer.exe search "coltrane" --type tracks -n 50
 
 \subsection{Duration Filter}
 
-The CLI supports \texttt{-{}-min-duration} and \texttt{-{}-max-duration}.
+The CLI supports \texttt{-{}-min-dur} and \texttt{-{}-max-dur}.
 When either flag is active, the duration is shown in brackets next to each
 result (\texttt{[1:08:58]}).  Accepted formats:
 
@@ -468,11 +494,11 @@ result (\texttt{[1:08:58]}).  Accepted formats:
 \end{center}
 
 \begin{cmdbox}
-streamer.exe search "pancrasia" --type albums --min-duration 10m
+streamer.exe search "pancrasia" --type albums --min-dur 10m
 \end{cmdbox}
 
 \begin{cmdbox}
-streamer.exe search "coltrane" --type tracks --min-duration 8m --max-duration 20m
+streamer.exe search "coltrane" --type tracks --min-dur 8m --max-dur 20m
 \end{cmdbox}
 
 \begin{warnbox}
@@ -486,7 +512,7 @@ Add \texttt{-{}-tsv} for tab-separated output (columns: id, title, artist,
 label, date, \textbf{duration in seconds}, genre, hires, type, explicit):
 
 \begin{cmdbox}
-streamer.exe search "pancrasia" --type albums --min-duration 10m --tsv
+streamer.exe search "pancrasia" --type albums --min-dur 10m --tsv
 \end{cmdbox}
 
 \subsection{Download}
@@ -506,6 +532,161 @@ streamer.exe download 12345678 --quality flac
 
 Use \texttt{-{}-account N} (0-based) to pick which account to download with.
 The default is account 0.
+
+Other download flags:
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Flag} & \textbf{Effect} \\
+\midrule
+\texttt{-o, -{}-output DIR}   & Download somewhere other than the configured folder \\
+\texttt{-j, -{}-concurrency N} & How many tracks at once (default 8) \\
+\texttt{-{}-no-extras}        & Skip cover art, booklet and artist bio \\
+\texttt{-{}-no-metadata}      & Skip writing tags into the files \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Download Speed}
+
+Qobuz limits the speed of each individual connection, not your account.
+Streamer works around this by downloading several tracks at once \emph{and}
+splitting each track across several connections, so a large Hi-Res album
+arrives many times faster than a single stream would allow.  The progress line
+shows what you are actually getting:
+
+\begin{cmdbox}
+~~[~3/34]~~184.2/602.5 MB~~~9.4 MB/s~~~ETA 0:44
+\end{cmdbox}
+
+\texttt{-j} raises or lowers how many tracks run in parallel.  There is a
+built-in ceiling on total connections, so raising it far will not flood your
+connection or annoy the server.
+
+\begin{tipbox}
+Speeds vary a lot between albums, and that is normal --- it depends on whether
+Qobuz's servers already have that album cached near you.  A cold album is
+slower on its first download.
+\end{tipbox}
+
+\subsection{Refreshing App Credentials}
+
+Qobuz periodically rotates the internal keys (\texttt{app\_id} /
+\texttt{app\_secret}) that every client must sign requests with.  When that
+happens, logging in and browsing keep working but downloads start failing with
+\emph{Invalid Request Signature}.
+
+Streamer detects this and repairs itself automatically on the next download,
+saving the new keys to your config.  If you ever want to force it:
+
+\begin{cmdbox}
+streamer.exe refresh-credentials
+\end{cmdbox}
+
+%=============================================================================
+\section{Your Library --- the Catalog}
+%=============================================================================
+
+Because the audio files are named by ID (Section~4.3), the real names live in
+a small database inside your music folder:
+
+\begin{cmdbox}
+Music/.streamer/library.db
+\end{cmdbox}
+
+It travels with the music.  Copy the drive to another machine and the names go
+with it.  It is an ordinary SQLite file, so any SQLite browser can open it.
+
+\subsection{Seeing What You Have}
+
+List your albums:
+
+\begin{cmdbox}
+streamer.exe library list
+\end{cmdbox}
+
+\begin{cmdbox}
+i846oxcvfim0a~~Skrillex --- F*CK U SKRILLEX \ldots\ <3~~(2025-04-01)~~34/34 tracks
+\end{cmdbox}
+
+The \texttt{34/34} is files on disk versus tracks on the album, so a partly
+downloaded album is obvious.  Add \texttt{-{}-tracks} to list individual
+tracks, \texttt{-n} to change the limit, \texttt{-{}-tsv} for machine-readable
+output.
+
+\subsection{Translating an ID Back to a Name}
+
+\begin{cmdbox}
+streamer.exe library resolve i846oxcvfim0a
+\end{cmdbox}
+
+Accepts an album ID, a track ID, or the path to a downloaded file --- useful
+when you are staring at a folder and cannot tell what it is.
+
+\subsection{Keeping the Catalog Honest --- \texttt{scan}}
+
+\begin{warnbox}
+The catalog is written when you download.  It does \textbf{not} watch your
+folders.  If you delete files yourself (Explorer, \texttt{rm}, a cleanup
+tool), the catalog will keep claiming you still have them until you run
+\texttt{scan}.
+\end{warnbox}
+
+\begin{cmdbox}
+streamer.exe library scan
+\end{cmdbox}
+
+This walks your music folder and makes the catalog match reality:
+
+\begin{itemize}
+  \item files you deleted are dropped from the catalog;
+  \item files the catalog does not know about are added --- their metadata is
+        re-fetched from Qobuz using the IDs in the path;
+  \item cover art and booklets are re-registered;
+  \item sizes that changed are refreshed.
+\end{itemize}
+
+\textbf{This is also how you rebuild a lost catalog.}  If
+\texttt{.streamer/library.db} is deleted, nothing is permanently lost --- the
+folder names \emph{are} the Qobuz album IDs and the file names \emph{are} the
+track IDs, so \texttt{scan} can fetch every real name again from scratch.
+Running \texttt{library list} in that situation tells you so.
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Flag} & \textbf{Effect} \\
+\midrule
+\texttt{-{}-dry-run} & Report what would change without writing anything \\
+\texttt{-{}-offline} & Do not contact Qobuz.  Still removes deleted files and
+                       refreshes sizes, but cannot re-learn albums it has
+                       never seen \\
+\texttt{-{}-root DIR} & Scan a folder other than your configured download dir \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{tipbox}
+Deleting a file is never dangerous --- nothing breaks, the catalog just goes
+out of date.  Re-downloading the same track also fixes its entry
+automatically, without a scan.
+\end{tipbox}
+
+\subsection{Asking Your Own Questions}
+
+Since it is plain SQLite, you can query the library directly.  The
+\texttt{view\_library} view joins files to their names:
+
+\begin{cmdbox}
+sqlite3 Music/.streamer/library.db \textbackslash{}\\
+~~"SELECT artist\_name, ROUND(SUM(duration)/3600.0,1) hours \textbackslash{}\\
+~~~~FROM view\_library GROUP BY 1 ORDER BY 2 DESC LIMIT 10;"
+\end{cmdbox}
+
+The database also records release dates, labels, genres, ISRCs, bit depth and
+sampling rate, so questions like ``how many hours of 24-bit do I own'' or
+``which labels do I buy most from'' are a single query.
 
 %=============================================================================
 \section{Multiple Accounts}
@@ -533,7 +714,20 @@ up your credentials as a JSON file.
 \section{Configuration File}
 %=============================================================================
 
-Location: \texttt{\%APPDATA\%\textbackslash{}streamer\textbackslash{}config.toml}
+Location:
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Windows}    & \texttt{\%APPDATA\%\textbackslash{}streamer\textbackslash{}config.toml} \\
+\textbf{Linux / macOS} & \texttt{\textasciitilde/.config/streamer/config.toml} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+This holds your settings and accounts.  It is separate from the library
+catalog (Section~7), which lives inside your music folder so it travels with
+the music.
 
 \begin{cmdbox}
 {[[}accounts{]]}\\
@@ -584,6 +778,32 @@ needed, but be careful to keep valid TOML syntax.
 
   \item[Duration filter returns fewer results than requested]
     Expected --- see the warning box in Section~5.2.  Increase \texttt{-n}.
+
+  \item[Downloads fail with ``Invalid Request Signature'']
+    Qobuz rotated its internal app keys.  Streamer normally fixes this by
+    itself on the next attempt; if it does not, run
+    \texttt{streamer.exe refresh-credentials}.
+
+  \item[Folders are named like \texttt{i846oxcvfim0a} instead of the album name]
+    That is intentional --- see Section~4.3.  Use
+    \texttt{streamer.exe library resolve i846oxcvfim0a} to see the real name,
+    or \texttt{streamer.exe library list} for everything at once.
+
+  \item[\texttt{library list} shows albums I deleted]
+    The catalog is only written during downloads; it does not watch your
+    folders.  Run \texttt{streamer.exe library scan} to bring it back in line.
+
+  \item[I deleted \texttt{.streamer} and lost all the names]
+    Nothing is permanently lost.  Run \texttt{streamer.exe library scan} --- it
+    reads the IDs from the folder and file names and fetches every real name
+    again from Qobuz.  Artist images and bios that lived inside
+    \texttt{.streamer} are gone, but reappear next time you download from that
+    artist.
+
+  \item[A download was interrupted and left a \texttt{.part} file]
+    Harmless.  \texttt{.part} is the staging name used while a file is still
+    being assembled; an unfinished one is never mistaken for real audio.
+    Delete it, or just download the album again.
 
   \item[File names contain garbled characters]
     This is a build issue: ensure \texttt{streamer-gui.exe} was compiled with

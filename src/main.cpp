@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -385,14 +386,16 @@ int main(int argc, char **argv) {
 
     // ── library ───────────────────────────────────────────────────────────────
     // Downloads are ID-addressed on disk, so this is where the real names are.
-    std::string lib_root, lib_key;
-    int lib_limit = 50;
-    bool lib_tracks = false, lib_tsv = false;
+    std::string lib_root, lib_key, lib_country;
+    int lib_limit = 50, lib_account = -1;
+    bool lib_tracks = false, lib_tsv = false, lib_dry_run = false, lib_offline = false;
     {
         auto *sub = app.add_subcommand("library", i18n::t("cmd_library"));
         sub->require_subcommand(1);
         sub->add_option("--root", lib_root,
             "Library root (default: the configured download directory)");
+        sub->add_option("--country", lib_country, "Account country code (scan)");
+        sub->add_option("--account", lib_account, "Account index (scan)");
 
         auto *ls = sub->add_subcommand("list", i18n::t("cmd_lib_list"));
         ls->add_flag("--tracks", lib_tracks, "List tracks instead of albums");
@@ -422,7 +425,10 @@ int main(int argc, char **argv) {
             }
             auto rows = library::list_albums(root, limit);
             if (rows.empty()) {
-                std::printf("%s %s\n", i18n::t("lib_empty"), root.c_str());
+                if (library::catalog_looks_lost(root))
+                    std::printf("%s\n", i18n::t("lib_catalog_lost"));
+                else
+                    std::printf("%s %s\n", i18n::t("lib_empty"), root.c_str());
                 return;
             }
             for (const auto &a : rows) {
@@ -436,6 +442,38 @@ int main(int argc, char **argv) {
                                 a.release_date.c_str(), a.files_on_disk,
                                 a.tracks_count.value_or(0));
             }
+        });
+
+        auto *sc = sub->add_subcommand("scan", i18n::t("cmd_lib_scan"));
+        sc->add_flag("--dry-run", lib_dry_run, "Report what would change without writing");
+        sc->add_flag("--offline", lib_offline,
+            "Don't contact Qobuz; files the catalog has never seen stay unknown");
+        sc->callback([&]() {
+            std::string root = library_root(lib_root);
+
+            // Only needed to re-learn albums the catalog has lost; an offline
+            // scan still prunes deleted files and refreshes sizes.
+            library::AlbumFetcher fetch;
+            if (!lib_offline) {
+                config::Config cur = config::load();
+                const config::Account &acct = (lib_account >= 0)
+                    ? select_account_idx(cur, lib_account)
+                    : select_account(cur, lib_country);
+                auto svc = std::make_shared<kb::QobuzApiService>(build_authenticated_api(acct));
+                fetch = [svc](const std::string &album_id) -> std::optional<kb::Album> {
+                    auto res = svc->get_album(album_id, std::string("track_ids"));
+                    if (!res.ok()) return std::nullopt;
+                    return res.value();
+                };
+            }
+
+            auto r = library::scan(root, fetch, lib_dry_run);
+            std::printf("%s\n  %d file(s) on disk\n  %d adopted\n  %d stale entr(ies) removed\n"
+                        "  %d size(s) updated\n  %d asset(s) registered\n"
+                        "  %d album(s) re-fetched\n  %d unrecognised\n",
+                        root.c_str(), r.files_seen, r.adopted, r.removed, r.updated,
+                        r.assets, r.fetched, r.unknown);
+            if (lib_dry_run) std::printf("%s\n", i18n::t("lib_scan_dry"));
         });
 
         auto *rv = sub->add_subcommand("resolve", i18n::t("cmd_lib_resolve"));
