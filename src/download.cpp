@@ -121,11 +121,30 @@ struct ProgressMeter {
         double dt = std::chrono::duration<double>(now - last_sample).count();
         if (dt < 0.25) return;
         double instant = (now_bytes - last_bytes) / dt;
-        // ~3s time constant.
-        double alpha = 1.0 - std::exp(-dt / 3.0);
+        // ~5s time constant: chunked transfers hand bytes over in burstier
+        // clumps than one long stream did, so a shorter window just jitters.
+        double alpha = 1.0 - std::exp(-dt / 5.0);
         speed = (speed <= 0.0) ? instant : speed + alpha * (instant - speed);
         last_sample = now;
         last_bytes = now_bytes;
+    }
+
+    // Bytes per second over the whole transfer. This is what to print when a
+    // download finishes: the live EWMA at that instant is measuring the last
+    // few KB dribbling in, which reads as "0.1 MB/s" on an album that just
+    // averaged twenty times that.
+    double average_speed_locked(uint64_t done_bytes) const {
+        double elapsed = std::chrono::duration<double>(Clock::now() - started).count();
+        return elapsed > 0 ? done_bytes / elapsed : 0.0;
+    }
+
+    // An ETA needs both a settled speed estimate and enough of the transfer
+    // done for the extrapolated total to mean anything. "ETA 13:51" on an
+    // album that finished seconds later is worse than printing nothing.
+    bool eta_is_meaningful_locked(uint64_t done_bytes, uint64_t est_total) const {
+        double elapsed = std::chrono::duration<double>(Clock::now() - started).count();
+        return elapsed >= 5.0 && speed > 0 && est_total > 0 &&
+               done_bytes * 10 >= est_total;   // at least 10% in
     }
 
     bool should_draw_locked() {
@@ -150,9 +169,16 @@ static kb::TrackProgressFn single_track_progress() {
         if (!complete && !m->should_draw_locked()) return;
 
         int pct = tot > 0 ? static_cast<int>(dl * 100 / tot) : 0;
-        double remaining = (m->speed > 0 && tot > dl) ? (tot - dl) / m->speed : 0;
-        std::printf("\r  %3d%%  %s  %.1f MB/s  ETA %s   ", pct, format_bytes(dl).c_str(),
-                    m->speed / 1048576.0, format_eta(remaining).c_str());
+        if (complete) {
+            std::printf("\r  %3d%%  %s  %.1f MB/s average        ", pct,
+                        format_bytes(dl).c_str(), m->average_speed_locked(dl) / 1048576.0);
+        } else {
+            double remaining = (m->speed > 0 && tot > dl) ? (tot - dl) / m->speed : 0;
+            bool show_eta = m->eta_is_meaningful_locked(dl, tot);
+            std::printf("\r  %3d%%  %s  %.1f MB/s  ETA %s   ", pct, format_bytes(dl).c_str(),
+                        m->speed / 1048576.0,
+                        show_eta ? format_eta(remaining).c_str() : "--:--");
+        }
         std::fflush(stdout);
         if (complete && !m->done_printed) {
             m->done_printed = true;
@@ -178,11 +204,19 @@ static kb::TrackProgressFn album_progress(int total_tracks) {
         if (!complete && !m->should_draw_locked()) return;
 
         uint64_t est = m->estimated_total_locked();
-        double remaining = (m->speed > 0 && est > done_bytes) ? (est - done_bytes) / m->speed
-                                                              : 0;
-        std::printf("\r  [%2d/%d]  %s/%s  %.1f MB/s  ETA %s   ", n, m->track_count,
-                    format_bytes(done_bytes).c_str(), format_bytes(est).c_str(),
-                    m->speed / 1048576.0, format_eta(remaining).c_str());
+        if (complete) {
+            std::printf("\r  [%2d/%d]  %s  %.1f MB/s average        ", n, m->track_count,
+                        format_bytes(done_bytes).c_str(),
+                        m->average_speed_locked(done_bytes) / 1048576.0);
+        } else {
+            double remaining =
+                (m->speed > 0 && est > done_bytes) ? (est - done_bytes) / m->speed : 0;
+            bool show_eta = m->eta_is_meaningful_locked(done_bytes, est);
+            std::printf("\r  [%2d/%d]  %s/%s  %.1f MB/s  ETA %s   ", n, m->track_count,
+                        format_bytes(done_bytes).c_str(), format_bytes(est).c_str(),
+                        m->speed / 1048576.0,
+                        show_eta ? format_eta(remaining).c_str() : "--:--");
+        }
         std::fflush(stdout);
         if (complete && !m->done_printed) {
             m->done_printed = true;
