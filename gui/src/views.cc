@@ -266,6 +266,32 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
             if (i + 1 < liveCols.size()) hit.w -= kResizeStripPx * 0.5f;
             hits.push_back({hit, ActTableHeaderBase + (int)i});
         }
+
+        // Rank badges for secondary sort keys: the widget drew a glyph only
+        // for the primary key above, so any additional active columns get a
+        // small "2"/"3".../direction-triangle drawn directly here, against
+        // the same header rects — no changes to the vendored widget.
+        if (ctl.sort_keys().size() > 1) {
+            float badgeSize = rowH * 0.28f;
+            for (size_t rank = 1; rank < ctl.sort_keys().size(); rank++) {
+                const auto& key = ctl.sort_keys()[rank];
+                int idx = indexForSortColumn(key.col);
+                if (idx < 0 || (size_t)idx >= liveCols.size()) continue;
+                const Rect& hc = liveCols[(size_t)idx];
+
+                float bx = hc.x + hc.w - rowH * 0.75f;
+                float by = hc.y + (hc.h - badgeSize) * 0.5f;
+                c.text(std::to_string(rank + 1), bx, by, badgeSize, theme::kAccent);
+
+                float cx = hc.x + hc.w - rowH * 0.18f;
+                float cy = hc.y + hc.h * 0.5f;
+                float aw = rowH * 0.09f, ah = rowH * 0.11f;
+                if (key.asc)
+                    c.triangle(cx - aw, cy + ah * 0.5f, cx + aw, cy + ah * 0.5f, cx, cy - ah * 0.5f, theme::kAccent);
+                else
+                    c.triangle(cx - aw, cy - ah * 0.5f, cx + aw, cy - ah * 0.5f, cx, cy + ah * 0.5f, theme::kAccent);
+            }
+        }
     }
     for (auto& vr : visibleRows)
         hits.push_back({vr.rect, ActTableRowBase + vr.index});
