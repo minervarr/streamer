@@ -96,6 +96,10 @@ bool ContainsI(const std::string& haystack, const std::string& needle) {
     return h.find(n) != std::u32string::npos;
 }
 
+bool EqualsI(const std::string& a, const std::string& b) {
+    return ToLowerStr(Utf8Decode(a)) == ToLowerStr(Utf8Decode(b));
+}
+
 // ── Field / value normalization (ES -> EN, mirrors QueryParser.cpp) ───────
 
 std::string NormalizeField(const std::string& f) {
@@ -133,7 +137,7 @@ std::string NormalizeType(const std::string& v) {
 
 // ── Tokenizer ────────────────────────────────────────────────────────────
 
-enum class TokKind { Word, Quoted, Colon, Gt, Lt, Gte, Lte, Dash,
+enum class TokKind { Word, Quoted, Colon, Gt, Lt, Gte, Lte, Dash, Eq,
                      And, Or, Not, LParen, RParen, Eof };
 
 struct Token { TokKind kind; std::string val; };
@@ -164,6 +168,7 @@ std::vector<Token> Tokenize(const std::u32string& input) {
         if (c == U'(') { toks.push_back({TokKind::LParen, "("}); ++i; continue; }
         if (c == U')') { toks.push_back({TokKind::RParen, ")"}); ++i; continue; }
         if (c == U'-') { toks.push_back({TokKind::Dash,   "-"}); ++i; continue; }
+        if (c == U'=') { toks.push_back({TokKind::Eq,     "="}); ++i; continue; }
 
         if (c == U'>') {
             if (i + 1 < n && input[i+1] == U'=') { toks.push_back({TokKind::Gte, ">="}); i += 2; }
@@ -282,6 +287,7 @@ struct Parser {
             else if (at(TokKind::Lt))  { n->filter.op = "<";  consume(); }
             else if (at(TokKind::Gte)) { n->filter.op = ">="; consume(); }
             else if (at(TokKind::Lte)) { n->filter.op = "<="; consume(); }
+            else if (at(TokKind::Eq))  { n->filter.op = "=";  consume(); }
             else                        { n->filter.op = ":"; }
 
             if (atValue()) {
@@ -313,13 +319,14 @@ struct Parser {
 bool MatchFilter(const FilterNode& f, const SearchResult& r) {
     const std::string& field = f.field;
 
-    if (field == "title")  return ContainsI(r.title,  f.value);
-    if (field == "artist") return ContainsI(r.artist, f.value);
-    if (field == "album")  return ContainsI(r.album,  f.value);
-    if (field == "genre")  return ContainsI(r.genre,  f.value);
-    if (field == "label")  return ContainsI(r.label,  f.value);
-    if (field == "type")    return ContainsI(r.type,    NormalizeType(f.value));
-    if (field == "country") return ContainsI(r.country, f.value);
+    if (field == "title")  return f.op == "=" ? EqualsI(r.title,  f.value) : ContainsI(r.title,  f.value);
+    if (field == "artist") return f.op == "=" ? EqualsI(r.artist, f.value) : ContainsI(r.artist, f.value);
+    if (field == "album")  return f.op == "=" ? EqualsI(r.album,  f.value) : ContainsI(r.album,  f.value);
+    if (field == "genre")  return f.op == "=" ? EqualsI(r.genre,  f.value) : ContainsI(r.genre,  f.value);
+    if (field == "label")  return f.op == "=" ? EqualsI(r.label,  f.value) : ContainsI(r.label,  f.value);
+    if (field == "type")    return f.op == "=" ? EqualsI(r.type, NormalizeType(f.value))
+                                                 : ContainsI(r.type, NormalizeType(f.value));
+    if (field == "country") return f.op == "=" ? EqualsI(r.country, f.value) : ContainsI(r.country, f.value);
 
     if (field == "hires") {
         std::string v = NormalizeBool(f.value);

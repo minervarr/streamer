@@ -149,7 +149,7 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
         float ls = rowH * 0.34f, lx = panel.x + area.w * 0.015f, ly = panel.y + rowH * 0.15f;
         const char* lines[] = {
             "Fields: artist, title, album, genre, label, country, type, year, duration, hires, explicit",
-            "Operators:  field:value (contains)   field:>N  field:<N  field:>=N  field:<=N (numeric)   field:N-M (range)",
+            "Operators:  field:value (contains)   field:=value (exact)   field:>N  field:<N  field:>=N  field:<=N (numeric)   field:N-M (range)",
             "Boolean:  space = AND   or / \"or\" = OR   not / \"!\" = NOT   ( ) for grouping",
             "Examples:  artist:\"Luísa Sonza\" year:2020-2024   duration:>3m hires:true   not explicit:true",
         };

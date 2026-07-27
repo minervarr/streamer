@@ -45,8 +45,10 @@ namespace {
 // ALL-CAPS accented query must still fold correctly against a lowercase
 // accented row.
 int g_fail_count = 0;
+int g_check_count = 0;
 
 void check(bool cond, const char* what) {
+    ++g_check_count;
     if (!cond) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_fail_count; }
 }
 
@@ -70,6 +72,27 @@ int run_selftest() {
     // Quoted filter value, accent preserved.
     check(Match(Parse("artist:\"Luísa Sonza\""), luisa), "artist:\"Luísa Sonza\" matches");
     check(!Match(Parse("artist:\"Anitta\""), luisa), "artist:\"Anitta\" does not match");
+
+    // Exact-match operator '=': field:value stays "contains", field:=value
+    // is exact/case-insensitive — the bug this fixes is artist:"poppy"
+    // matching both "Poppy" and "Poppy Ajudha" with no way to ask for just
+    // the former.
+    SearchResult poppy;
+    poppy.title = "Poppy";
+    poppy.artist = "Poppy";
+    poppy.type = "artist";
+
+    SearchResult poppyAjudha;
+    poppyAjudha.title = "Trouble";
+    poppyAjudha.artist = "Poppy Ajudha";
+    poppyAjudha.type = "track";
+
+    check(Match(Parse("artist:poppy"), poppy), "artist:poppy (contains) matches 'Poppy'");
+    check(Match(Parse("artist:poppy"), poppyAjudha), "artist:poppy (contains) also matches 'Poppy Ajudha'");
+    check(Match(Parse("artist:=poppy"), poppy), "artist:=poppy (exact) matches 'Poppy'");
+    check(!Match(Parse("artist:=poppy"), poppyAjudha), "artist:=poppy (exact) does not match 'Poppy Ajudha'");
+    check(Match(Parse("artist:=\"Luísa Sonza\""), luisa), "artist:=\"Luísa Sonza\" (exact, quoted) matches the full name");
+    check(!Match(Parse("artist:=Luísa"), luisa), "artist:=Luísa (exact, partial) does not match 'Luísa Sonza'");
 
     // Numeric range and comparison.
     check(Match(Parse("year:2020-2024"), luisa), "year:2020-2024 matches 2023");
@@ -130,7 +153,7 @@ int run_selftest() {
     }
 
     if (g_fail_count == 0) {
-        std::printf("selftest: ok (%d assertions)\n", 19);
+        std::printf("selftest: ok (%d assertions)\n", g_check_count);
         return 0;
     }
     std::fprintf(stderr, "selftest: %d assertion(s) failed\n", g_fail_count);

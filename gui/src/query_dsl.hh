@@ -9,9 +9,11 @@
 // regardless of the caller's locale.
 //
 // Fields: artist, title, album, genre, label, country, type, year, duration,
-// hires, explicit. Operators: ':' (contains / exact for numeric), '>' '<'
-// '>=' '<=' (numeric), '-' (numeric range, e.g. year:2000-2010). Boolean
-// AND (implicit or '&&'/"and"/"y"), OR ('||'/"or"/"o"), NOT ('!'/"not"),
+// hires, explicit. Operators: ':' (contains / exact for numeric), '=' right
+// after ':' (field:=value — exact, case-insensitive; a harmless synonym on
+// numeric/bool fields, which are already exact), '>' '<' '>=' '<='
+// (numeric), '-' (numeric range, e.g. year:2000-2010). Boolean AND
+// (implicit or '&&'/"and"/"y"), OR ('||'/"or"/"o"), NOT ('!'/"not"),
 // parentheses for grouping.
 
 #include <memory>
