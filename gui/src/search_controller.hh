@@ -27,6 +27,29 @@ enum class SortColumn {
     None, Title, Artist, Label, Date, Duration, Genre, HiRes, Explicit, Type, Country
 };
 
+enum class SortDirection { None, Ascending, Descending };
+
+// One entry in the active sort stack: `col` sorts on that column, `asc`
+// is its current direction. Index 0 of the stack is the primary key;
+// later entries only break ties left by earlier ones.
+struct SortKey {
+    SortColumn col;
+    bool asc;
+};
+
+// Cycles `col`'s state in `keys` without touching any other key's position:
+// absent -> appended at the end (lowest priority), ascending; ascending ->
+// descending, same slot; descending -> erased. Pure function (no
+// SearchController/network needed) so it can be exercised headlessly by
+// gui_main.cc's --selftest.
+void CycleSortKey(std::vector<SortKey>& keys, SortColumn col);
+
+// Stable-sorts `results` by walking `keys` in order: the first key two rows
+// disagree on decides their relative order; if every key agrees they're
+// equal, the input's relative order is kept (stable_sort). A no-op when
+// `keys` is empty. Pure function, same testability rationale as above.
+void ApplySort(std::vector<query_dsl::SearchResult>& results, const std::vector<SortKey>& keys);
+
 class SearchController {
 public:
     // `account` may have empty app_id/app_secret (no account configured
@@ -50,9 +73,12 @@ public:
     const std::vector<query_dsl::SearchResult>& results() const { return results_; }
     const std::string& last_error() const { return last_error_; }
 
-    void sort(SortColumn col);  // toggles ascending/descending if already active
-    SortColumn sort_column() const { return sort_col_; }
-    bool sort_ascending() const { return sort_asc_; }
+    // See CycleSortKey's doc comment above — this drives the same 3-state
+    // cycle against this controller's own results_.
+    void sort(SortColumn col);
+    const std::vector<SortKey>& sort_keys() const { return sort_keys_; }
+    SortDirection sort_direction(SortColumn col) const;
+    int sort_priority(SortColumn col) const;  // 0-based rank in sort_keys(), -1 if inactive
 
     // Selection is keyed by each result's stable `id`, not its row index —
     // sort() reorders results_ in place, so an index-based selection would
@@ -75,13 +101,10 @@ private:
     std::optional<kb::QobuzApiService> svc_;
     std::vector<query_dsl::SearchResult> results_;
     std::string last_error_;
-    SortColumn sort_col_ = SortColumn::None;
-    bool sort_asc_ = true;
+    std::vector<SortKey> sort_keys_;
     std::set<std::string> selected_ids_;
     bool cheatsheet_open_ = false;
     uint64_t revision_ = 0;
-
-    void applySort();
 };
 
 } // namespace search

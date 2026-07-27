@@ -228,9 +228,20 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
 
     int rowCount = (int)ctl.results().size();
     auto cellFn = [&ctl](int row, int col) { return cellForResult(ctl, row, col); };
+
+    // The widget only knows how to draw a glyph for one column — pass it
+    // the primary (highest-priority) sort key, same as the single-column
+    // behavior this replaces. Secondary keys get their own rank badge below,
+    // drawn directly by this file against the widget's header rects.
+    int primaryIdx = -1;
+    bool primaryAsc = true;
+    if (!ctl.sort_keys().empty()) {
+        primaryIdx = indexForSortColumn(ctl.sort_keys()[0].col);
+        primaryAsc = ctl.sort_keys()[0].asc;
+    }
     auto visibleRows = widgets::drawSortableTable(
         c, tableArea, cols, cellFn, rowCount,
-        indexForSortColumn(ctl.sort_column()), ctl.sort_ascending(),
+        primaryIdx, primaryAsc,
         tableScrollPx, rowH, hoverRow, hoverHeaderCol, tstyle,
         kCellFit, &table.columnWidthsPx);
 

@@ -165,16 +165,27 @@ bool SearchController::search(const std::string& query_text, const std::string& 
     results_.clear();
     for (auto& [score, r] : scored) results_.push_back(std::move(r));
 
-    sort_col_ = SortColumn::None;
+    sort_keys_.clear();
     ++revision_;
     return true;
 }
 
 void SearchController::sort(SortColumn col) {
-    if (sort_col_ == col) sort_asc_ = !sort_asc_;
-    else { sort_col_ = col; sort_asc_ = true; }
-    applySort();
+    CycleSortKey(sort_keys_, col);
+    ApplySort(results_, sort_keys_);
     ++revision_;
+}
+
+SortDirection SearchController::sort_direction(SortColumn col) const {
+    for (const auto& k : sort_keys_)
+        if (k.col == col) return k.asc ? SortDirection::Ascending : SortDirection::Descending;
+    return SortDirection::None;
+}
+
+int SearchController::sort_priority(SortColumn col) const {
+    for (size_t i = 0; i < sort_keys_.size(); i++)
+        if (sort_keys_[i].col == col) return (int)i;
+    return -1;
 }
 
 namespace {
@@ -195,12 +206,25 @@ bool LessAt(SortColumn col, const query_dsl::SearchResult& a, const query_dsl::S
 }
 } // namespace
 
-void SearchController::applySort() {
-    if (sort_col_ == SortColumn::None) return;
-    bool asc = sort_asc_;
-    std::stable_sort(results_.begin(), results_.end(),
+void CycleSortKey(std::vector<SortKey>& keys, SortColumn col) {
+    auto it = std::find_if(keys.begin(), keys.end(),
+                           [col](const SortKey& k) { return k.col == col; });
+    if (it == keys.end())      keys.push_back({col, true});
+    else if (it->asc)          it->asc = false;
+    else                        keys.erase(it);
+}
+
+void ApplySort(std::vector<query_dsl::SearchResult>& results, const std::vector<SortKey>& keys) {
+    if (keys.empty()) return;
+    std::stable_sort(results.begin(), results.end(),
         [&](const query_dsl::SearchResult& a, const query_dsl::SearchResult& b) {
-            return asc ? LessAt(sort_col_, a, b) : LessAt(sort_col_, b, a);
+            for (const auto& key : keys) {
+                bool ab = LessAt(key.col, a, b);
+                bool ba = LessAt(key.col, b, a);
+                if (ab == ba) continue;  // tied under this key — fall through to the next
+                return key.asc ? ab : ba;
+            }
+            return false;  // equal under every key
         });
 }
 

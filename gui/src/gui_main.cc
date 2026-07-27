@@ -94,6 +94,48 @@ int run_selftest() {
     check(Match(Parse("artist:=\"Luísa Sonza\""), luisa), "artist:=\"Luísa Sonza\" (exact, quoted) matches the full name");
     check(!Match(Parse("artist:=Luísa"), luisa), "artist:=Luísa (exact, partial) does not match 'Luísa Sonza'");
 
+    // ── Multi-column stacked sort: CycleSortKey's 3-state-per-column cycle
+    // (ascending -> descending -> removed), and ApplySort's stacked
+    // comparator (earlier keys in `keys` take priority; later ones only
+    // break ties). Pure functions — no SearchController/network needed.
+    {
+        using namespace search;
+
+        std::vector<SortKey> keys;
+        CycleSortKey(keys, SortColumn::Artist);
+        check(keys.size() == 1 && keys[0].col == SortColumn::Artist && keys[0].asc,
+             "1st click on Artist: appended, ascending");
+
+        CycleSortKey(keys, SortColumn::Duration);
+        check(keys.size() == 2 && keys[0].col == SortColumn::Artist &&
+             keys[1].col == SortColumn::Duration && keys[1].asc,
+             "1st click on Duration: appended as secondary, Artist stays primary");
+
+        CycleSortKey(keys, SortColumn::Artist);
+        check(keys.size() == 2 && keys[0].col == SortColumn::Artist && !keys[0].asc,
+             "2nd click on Artist: flips to descending in place, Duration still secondary");
+
+        CycleSortKey(keys, SortColumn::Artist);
+        check(keys.size() == 1 && keys[0].col == SortColumn::Duration,
+             "3rd click on Artist: removed from the stack, Duration promoted to primary");
+
+        query_dsl::SearchResult ana, bea1, bea2;
+        ana.artist = "Ana";  ana.duration = 300;
+        bea1.artist = "Bea"; bea1.duration = 200;
+        bea2.artist = "Bea"; bea2.duration = 100;
+        std::vector<query_dsl::SearchResult> results = {bea1, ana, bea2};
+
+        ApplySort(results, {{SortColumn::Artist, true}});
+        check(results[0].artist == "Ana" && results[1].artist == "Bea" && results[2].artist == "Bea",
+             "ApplySort: single key groups by Artist ascending");
+
+        ApplySort(results, {{SortColumn::Artist, true}, {SortColumn::Duration, true}});
+        check(results[0].artist == "Ana" &&
+             results[1].artist == "Bea" && results[1].duration == 100 &&
+             results[2].artist == "Bea" && results[2].duration == 200,
+             "ApplySort: Artist stays primary, Duration breaks ties within the Bea group ascending");
+    }
+
     // Numeric range and comparison.
     check(Match(Parse("year:2020-2024"), luisa), "year:2020-2024 matches 2023");
     check(!Match(Parse("year:2000-2010"), luisa), "year:2000-2010 does not match 2023");
