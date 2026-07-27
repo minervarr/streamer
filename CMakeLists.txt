@@ -106,6 +106,7 @@ target_compile_definitions(sqlite3_lib PRIVATE
 add_library(streamer_core STATIC
     src/config.cpp
     src/history.cpp
+    src/library.cpp
     src/download.cpp
     src/search.cpp
     src/inspect.cpp

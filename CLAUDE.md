@@ -38,8 +38,30 @@ This is a pure C++ project. The CLI binary (`streamer`) is built by `CMakeLists.
 | `inspect.hh/.cpp` | Album track listing with availability info |
 | `extras.hh/.cpp` | Cover art, booklet PDF, artist bio download |
 | `history.hh/.cpp` | SQLite3 download history (record/list/export/import/clear) |
+| `library.hh/.cpp` | SQLite3 library catalog — the real names behind the ID-addressed layout |
+| `service_factory.hh/.cpp` | `qobuz::make_service()` — the one place a `QobuzApiService` is built |
 | `url.hh/.cpp` | URL parser for Qobuz links and bare IDs |
 | `i18n.hh/.cpp` | EN/ES translation table, OS language detection |
+
+### Library layout
+
+Downloads are **ID-addressed**, identically on every platform:
+
+```
+<download_dir>/<country>/<album_id>/<track_id>.<format_id>.<ext>
+<download_dir>/<country>/<album_id>/cover.jpg | booklet.pdf | album_description.txt
+<download_dir>/.streamer/library.db
+<download_dir>/.streamer/artists/<artist_id>/{artist.jpg,artist_bio.txt}
+```
+
+No title ever reaches a path, so no filesystem's reserved characters can mangle one
+(`F*CK U SKRILLEX … <3` used to land as `F_CK … _3`) and paths stay stable when upstream
+metadata is corrected. `format_id` is in the filename so two qualities of the same track
+coexist without the resume logic mistaking a finished file for a partial.
+
+The real, byte-exact names and the release metadata live in `library.db`, versioned via
+`PRAGMA user_version`. Start from the `view_library` view. `streamer library resolve <album-id
+| track-id | path>` maps any ID back to its names.
 
 ### Config
 

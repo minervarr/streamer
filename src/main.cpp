@@ -3,6 +3,7 @@
 #include "history.hh"
 #include "i18n.hh"
 #include "inspect.hh"
+#include "library.hh"
 #include "search.hh"
 #include "service_factory.hh"
 #include "url.hh"
@@ -48,6 +49,15 @@ static kb::QobuzApiService build_authenticated_api(const config::Account &acct) 
         std::exit(1);
     }
     return res.take();
+}
+
+// Library root for the `library` subcommands: --root wins, otherwise the
+// configured download directory. File scope, not a lambda inside the
+// subcommand block — CLI11 callbacks run after that block has exited.
+static std::string library_root(const std::string &override_root) {
+    if (!override_root.empty()) return override_root;
+    std::string dir = config::load().settings.download_dir.u8string();
+    return dir.empty() ? std::string(".") : dir;
 }
 
 // Find account by country code (or first if country is empty).
@@ -370,6 +380,84 @@ int main(int argc, char **argv) {
             for (auto &r : records)
                 std::printf("%s\n", history::format_record_line(r).c_str());
             std::printf("%zu %s\n", records.size(), i18n::t("records_shown"));
+        });
+    }
+
+    // ── library ───────────────────────────────────────────────────────────────
+    // Downloads are ID-addressed on disk, so this is where the real names are.
+    std::string lib_root, lib_key;
+    int lib_limit = 50;
+    bool lib_tracks = false, lib_tsv = false;
+    {
+        auto *sub = app.add_subcommand("library", i18n::t("cmd_library"));
+        sub->require_subcommand(1);
+        sub->add_option("--root", lib_root,
+            "Library root (default: the configured download directory)");
+
+        auto *ls = sub->add_subcommand("list", i18n::t("cmd_lib_list"));
+        ls->add_flag("--tracks", lib_tracks, "List tracks instead of albums");
+        ls->add_option("-n,--limit", lib_limit, "Maximum rows");
+        ls->add_flag("--tsv", lib_tsv, "Tab-separated output for GUI");
+        ls->callback([&]() {
+            std::string root = library_root(lib_root);
+            uint32_t limit = static_cast<uint32_t>(lib_limit > 0 ? lib_limit : 50);
+            if (lib_tracks) {
+                auto rows = library::list_tracks(root, limit);
+                if (rows.empty()) {
+                    std::printf("%s %s\n", i18n::t("lib_empty"), root.c_str());
+                    return;
+                }
+                for (const auto &e : rows) {
+                    if (lib_tsv)
+                        std::printf("%lld\t%s\t%s\t%s\t%s\t%s\n", (long long)e.track_id,
+                                    e.track_title.c_str(), e.album_title.c_str(),
+                                    e.artist_name.c_str(), e.quality.c_str(),
+                                    e.rel_path.c_str());
+                    else
+                        std::printf("%3d. %-40s  %s — %s  [%s]\n", e.track_number.value_or(0),
+                                    e.track_title.c_str(), e.artist_name.c_str(),
+                                    e.album_title.c_str(), e.quality.c_str());
+                }
+                return;
+            }
+            auto rows = library::list_albums(root, limit);
+            if (rows.empty()) {
+                std::printf("%s %s\n", i18n::t("lib_empty"), root.c_str());
+                return;
+            }
+            for (const auto &a : rows) {
+                if (lib_tsv)
+                    std::printf("%s\t%s\t%s\t%s\t%d/%d\n", a.id.c_str(), a.title.c_str(),
+                                a.artist_name.c_str(), a.release_date.c_str(),
+                                a.files_on_disk, a.tracks_count.value_or(0));
+                else
+                    std::printf("%-14s %s — %s  (%s)  %d/%d tracks\n", a.id.c_str(),
+                                a.artist_name.c_str(), a.title.c_str(),
+                                a.release_date.c_str(), a.files_on_disk,
+                                a.tracks_count.value_or(0));
+            }
+        });
+
+        auto *rv = sub->add_subcommand("resolve", i18n::t("cmd_lib_resolve"));
+        rv->add_option("key", lib_key, "Album id, track id, or path")->required();
+        rv->callback([&]() {
+            std::string root = library_root(lib_root);
+            auto found = library::resolve(root, lib_key);
+            if (!found) {
+                std::fprintf(stderr, "%s %s\n", i18n::t("lib_not_found"), lib_key.c_str());
+                std::exit(1);
+            }
+            const auto &a = found->album;
+            if (!a.id.empty()) {
+                std::printf("%s\n  %s", a.title.c_str(), a.artist_name.c_str());
+                if (!a.release_date.empty()) std::printf("  (%s)", a.release_date.c_str());
+                if (!a.label_name.empty())   std::printf("  · %s", a.label_name.c_str());
+                std::printf("\n  id %s\n", a.id.c_str());
+            }
+            for (const auto &t : found->tracks) {
+                std::printf("  %3d. %-45s %s\n", t.track_number.value_or(0),
+                            t.track_title.c_str(), t.rel_path.c_str());
+            }
         });
     }
 

@@ -3,6 +3,7 @@
 #include "extras.hh"
 #include "history.hh"
 #include "i18n.hh"
+#include "library.hh"
 
 #include <cctype>
 #include <cstdio>
@@ -11,7 +12,6 @@
 #include <string>
 #include <unordered_set>
 
-#include <ae/sanitize.hh>
 #include <api/service.hh>
 #include <core/models.hh>
 #include <download/download.hh>
@@ -96,6 +96,29 @@ static kb::DownloadOptions base_opts(int concurrency, bool embed_metadata) {
     return opts;
 }
 
+// Sidecar assets that belong to no single album live under the library root's
+// .streamer/ directory, next to library.db — the top level of the library is
+// nothing but album-id directories. `root` is the un-suffixed download dir, so
+// artist assets are shared across country subtrees. Created on demand because
+// extras::save_artist_extras only writes files.
+static fs::path artist_asset_dir(const std::string &root, int artist_id) {
+    fs::path dir = fs::u8path(root) / ".streamer" / "artists" / std::to_string(artist_id);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    return dir;
+}
+
+// extras::save_* write straight to disk without reporting what they produced,
+// so pick the results up afterwards by looking for the names they use.
+static void record_assets(const std::string &root, const fs::path &dir,
+                          const std::string *album_id, const int *artist_id,
+                          std::initializer_list<std::pair<const char *, const char *>> names) {
+    for (auto [filename, kind] : names) {
+        fs::path p = dir / filename;
+        if (fs::exists(p)) library::record_asset(root, kind, album_id, artist_id, p.u8string());
+    }
+}
+
 static bool is_single_release(const kb::Album &album) {
     auto check = [](const std::optional<std::string> &s) {
         if (!s) return false;
@@ -162,6 +185,9 @@ bool run(kb::QobuzApiService &svc,
                 title_str  = track_res.value().title.value_or("");
                 artist_str = (track_res.value().performer && track_res.value().performer->name)
                     ? *track_res.value().performer->name : "";
+                if (success)
+                    library::record_track_download(output_dir, track_res.value(),
+                                                   res.value(), quality, format_id, country);
             }
             const std::string *ptitle   = title_str.empty()  ? nullptr : &title_str;
             const std::string *partist  = artist_str.empty() ? nullptr : &artist_str;
@@ -175,6 +201,10 @@ bool run(kb::QobuzApiService &svc,
         } else if constexpr (std::is_same_v<T, url::Album>) {
             const std::string &aid = target.id;
 
+            // extra=track_ids also returns the full `tracks` array — titles,
+            // numbers, ISRCs, durations — which is everything the catalog
+            // needs now that the filesystem carries none of it. ("tracks" is
+            // not an accepted extra; the array comes back regardless.)
             auto album_res = svc.get_album(aid, std::string("track_ids"));
             if (!album_res.ok()) {
                 std::fprintf(stderr, "%s %s\n",
@@ -183,75 +213,44 @@ bool run(kb::QobuzApiService &svc,
             }
             const kb::Album &al = album_res.value();
 
-            std::string artist_name = (al.artist && al.artist->name)
-                ? *al.artist->name : "Unknown Artist";
-            std::string album_disp = al.title.value_or("Unknown");
-            if (al.version && !al.version->empty())
-                album_disp += " (" + *al.version + ")";
-
             int artist_id = (al.artist && al.artist->id) ? *al.artist->id : 0;
-            fs::path artist_dir = fs::u8path(base_dir)
-                / fs::u8path(ae::sanitize_filename(artist_name));
+
+            // Singles are no longer a special case: with ID-addressed
+            // directories a one-track release is just a short album.
+            int total = al.tracks_count.value_or(
+                (al.tracks && al.tracks->items)
+                    ? static_cast<int>(al.tracks->items->size()) : 0);
+            auto opts = base_opts(concurrency, embed_metadata);
+            opts.progress = (total == 1) ? single_track_progress()
+                                         : album_progress(total > 0 ? total : 1);
+            std::printf("%s %s ...\n", i18n::t("downloading_album"), aid.c_str());
 
             std::vector<std::string> paths;
-
-            if (is_single_release(al)) {
-                // Singles → base_dir/Artist/Singles/Title/
-                fs::path single_dir = artist_dir / "Singles"
-                    / fs::u8path(ae::sanitize_filename(album_disp));
-
-                std::error_code ec;
-                fs::create_directories(single_dir, ec);
-                if (ec) {
-                    std::fprintf(stderr, "Cannot create directory %s: %s\n",
-                                 single_dir.u8string().c_str(), ec.message().c_str());
-                } else {
-                    std::printf("%s %s ...\n", i18n::t("downloading_album"), aid.c_str());
-                    std::vector<int> tids = al.track_ids.value_or(std::vector<int>{});
-                    int total = static_cast<int>(tids.size());
-                    auto opts = base_opts(concurrency, embed_metadata);
-                    opts.progress = (total == 1) ? single_track_progress()
-                                                 : album_progress(total);
-                    for (int tid : tids) {
-                        auto tres = kb::download_track(svc, tid, format_id,
-                                                       single_dir.u8string(), opts);
-                        if (tres.ok()) {
-                            paths.push_back(tres.value());
-                        } else {
-                            std::fprintf(stderr, "%s %s\n", i18n::t("error_download"),
-                                         tres.error().message.c_str());
-                        }
-                    }
-                    success = !paths.empty();
-                    if (save_extras && success) {
-                        extras::save_album_extras(svc, aid, single_dir);
-                        save_cover(svc, al, single_dir);
-                        if (artist_id > 0)
-                            extras::save_artist_extras(svc, artist_id, artist_dir);
-                    }
-                }
-
+            auto res = kb::download_album(svc, aid, format_id, base_dir, opts);
+            if (!res.ok()) {
+                std::fprintf(stderr, "%s %s\n", i18n::t("error_download"),
+                             res.error().message.c_str());
             } else {
-                // Regular album → base_dir/Artist/Album (quality)/
-                int total = al.tracks_count.value_or(
-                    al.track_ids ? static_cast<int>(al.track_ids->size()) : 0);
-                auto opts = base_opts(concurrency, embed_metadata);
-                opts.progress = (total == 1) ? single_track_progress()
-                                             : album_progress(total > 0 ? total : 1);
-                std::printf("%s %s ...\n", i18n::t("downloading_album"), aid.c_str());
-                auto res = kb::download_album(svc, aid, format_id, base_dir, opts);
-                if (!res.ok()) {
-                    std::fprintf(stderr, "%s %s\n", i18n::t("error_download"),
-                                 res.error().message.c_str());
-                } else {
-                    paths  = res.value();
-                    success = !paths.empty();
-                    if (save_extras && success) {
-                        fs::path album_dir = fs::u8path(paths.front()).parent_path();
-                        extras::save_album_extras(svc, aid, album_dir);
-                        save_cover(svc, al, album_dir);
-                        if (artist_id > 0)
-                            extras::save_artist_extras(svc, artist_id, artist_dir);
+                paths  = res.value();
+                success = !paths.empty();
+                // Before the extras: assets carry a foreign key onto albums,
+                // so the album row has to exist first.
+                library::record_download(output_dir, al, paths, quality, format_id,
+                                         country);
+                if (save_extras && success) {
+                    fs::path album_dir = fs::u8path(paths.front()).parent_path();
+                    extras::save_album_extras(svc, aid, album_dir);
+                    save_cover(svc, al, album_dir);
+                    record_assets(output_dir, album_dir, &aid, nullptr,
+                                  {{"cover.jpg", "cover"},
+                                   {"booklet.pdf", "booklet"},
+                                   {"album_description.txt", "description"}});
+                    if (artist_id > 0) {
+                        fs::path adir = artist_asset_dir(output_dir, artist_id);
+                        extras::save_artist_extras(svc, artist_id, adir);
+                        record_assets(output_dir, adir, nullptr, &artist_id,
+                                      {{"artist.jpg", "artist_image"},
+                                       {"artist_bio.txt", "artist_bio"}});
                     }
                 }
             }
@@ -280,12 +279,8 @@ bool run(kb::QobuzApiService &svc,
                              res.error().message.c_str());
             } else {
                 success = !res.value().empty();
-                if (save_extras && success) {
-                    fs::path artist_dir = fs::path(base_dir);
-                    if (!res.value().empty())
-                        artist_dir = fs::path(res.value().front()).parent_path().parent_path();
-                    extras::save_artist_extras(svc, arid, artist_dir);
-                }
+                if (save_extras && success)
+                    extras::save_artist_extras(svc, arid, artist_asset_dir(output_dir, arid));
             }
             auto artist_info = svc.get_artist(arid);
             std::string artist_str;

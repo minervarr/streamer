@@ -62,6 +62,16 @@ const char *t(const char *key) {
                       "Importar historial desde un archivo JSON");
     T("cmd_clear",    "Delete all history records",
                       "Eliminar todos los registros del historial");
+    T("cmd_library", "Browse the download catalog (real names live here, not in paths)",
+                     "Explorar el catálogo de descargas (los nombres reales están aquí, no en las rutas)");
+    T("cmd_lib_list",    "List catalogued albums or tracks",
+                         "Listar álbumes o pistas del catálogo");
+    T("cmd_lib_resolve", "Show the real names behind an album id, track id, or file path",
+                         "Mostrar los nombres reales de un id de álbum, id de pista o ruta");
+    T("lib_empty",       "Nothing catalogued yet in",
+                         "Todavía no hay nada catalogado en");
+    T("lib_not_found",   "Not in the catalog:",
+                         "No está en el catálogo:");
     T("cmd_refresh_credentials",
         "Re-scrape app_id/app_secret from the Qobuz web player and save them",
         "Volver a extraer app_id/app_secret del reproductor web de Qobuz y guardarlos");
