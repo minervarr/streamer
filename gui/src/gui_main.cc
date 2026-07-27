@@ -13,6 +13,7 @@
 #include "host.hh"
 #include "query_dsl.hh"
 #include "search_controller.hh"
+#include "service_factory.hh"
 #include "theme.hh"
 #include "views.hh"
 
@@ -216,17 +217,12 @@ void download_async(const config::Account& account, std::string quality,
                     std::string download_dir, std::string country,
                     std::vector<std::string> ids) {
     std::thread([account, quality, download_dir, country, ids]() {
-        kb::QobuzApiService::Config cfg;
-        cfg.app_id = account.app_id;
-        cfg.app_secret = account.app_secret;
-        auto res = kb::QobuzApiService::with_credentials(cfg);
+        auto res = qobuz::make_service(account);
         if (!res.ok()) {
             std::fprintf(stderr, "[download] %s\n", res.error().message.c_str());
             return;
         }
         auto svc = res.take();
-        if (!account.auth_token.empty())
-            svc.login_with_token(account.user_id, account.auth_token);
         for (auto& id : ids) {
             bool ok = dl::run(svc, id, quality, download_dir, country, 1, true, true);
             std::fprintf(stderr, "[download] %s: %s\n", id.c_str(), ok ? "done" : "failed");

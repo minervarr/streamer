@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 
@@ -134,6 +135,25 @@ void save(const Config &cfg, const fs::path &path) {
     std::ofstream f(path);
     if (!f) throw std::runtime_error("Cannot write config: " + path.u8string());
     f << out.str();
+}
+
+void persist_app_credentials(const std::string &app_id, const std::string &app_secret) {
+    static std::mutex mu;
+    std::lock_guard<std::mutex> lock(mu);
+
+    Config cfg = load();
+    if (cfg.accounts.empty()) cfg.accounts.push_back({});
+    for (auto &a : cfg.accounts) {
+        a.app_id     = app_id;
+        a.app_secret = app_secret;
+    }
+
+    try {
+        save(cfg);
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "Warning: could not persist refreshed credentials: %s\n",
+                     e.what());
+    }
 }
 
 } // namespace config

@@ -62,10 +62,19 @@ const char *t(const char *key) {
                       "Importar historial desde un archivo JSON");
     T("cmd_clear",    "Delete all history records",
                       "Eliminar todos los registros del historial");
+    T("cmd_refresh_credentials",
+        "Re-scrape app_id/app_secret from the Qobuz web player and save them",
+        "Volver a extraer app_id/app_secret del reproductor web de Qobuz y guardarlos");
 
     // console
     T("login_success",       "Login successful. Config saved.",
                              "Inicio de sesión exitoso. Configuración guardada.");
+    T("creds_refreshed",     "App credentials refreshed and saved.",
+                             "Credenciales de aplicación actualizadas y guardadas.");
+    T("creds_refresh_failed", "Could not refresh app credentials:",
+                              "No se pudieron actualizar las credenciales:");
+    T("creds_no_probe_track", "Could not find a track to validate the new secret against.",
+                              "No se encontró una pista para validar el nuevo secreto.");
     T("no_history",          "No download history.",
                              "No hay historial de descargas.");
 

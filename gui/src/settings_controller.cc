@@ -1,5 +1,7 @@
 #include "settings_controller.hh"
 
+#include "service_factory.hh"
+
 #include <api/service.hh>
 
 namespace settings {
@@ -40,10 +42,9 @@ bool SettingsController::login_with_token(const std::string& user_id, const std:
         ++revision_;
         return false;
     }
-    kb::QobuzApiService::Config svcCfg;
-    svcCfg.app_id = acct.app_id;
-    svcCfg.app_secret = acct.app_secret;
-    auto svcRes = kb::QobuzApiService::with_credentials(svcCfg);
+    // authenticate=false: log in with the credentials the user just typed,
+    // not with whatever token the account already has stored.
+    auto svcRes = qobuz::make_service(acct, /*authenticate=*/false);
     if (!svcRes.ok()) { last_error_ = svcRes.error().message; ++revision_; return false; }
     auto svc = svcRes.take();
 

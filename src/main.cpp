@@ -4,6 +4,7 @@
 #include "i18n.hh"
 #include "inspect.hh"
 #include "search.hh"
+#include "service_factory.hh"
 #include "url.hh"
 
 #include <cstdio>
@@ -28,10 +29,7 @@ namespace fs = std::filesystem;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static kb::QobuzApiService build_api(const config::Account &acct) {
-    kb::QobuzApiService::Config cfg;
-    cfg.app_id     = acct.app_id;
-    cfg.app_secret = acct.app_secret;
-    auto res = kb::QobuzApiService::with_credentials(cfg);
+    auto res = qobuz::make_service(acct, /*authenticate=*/false);
     if (!res.ok()) {
         std::fprintf(stderr, "Error: %s\n", res.error().message.c_str());
         std::exit(1);
@@ -40,17 +38,16 @@ static kb::QobuzApiService build_api(const config::Account &acct) {
 }
 
 static kb::QobuzApiService build_authenticated_api(const config::Account &acct) {
-    auto svc = build_api(acct);
     if (acct.auth_token.empty()) {
         std::fprintf(stderr, "%s\n", i18n::t("err_not_authenticated"));
         std::exit(1);
     }
-    auto login_res = svc.login_with_token(acct.user_id, acct.auth_token);
-    if (!login_res.ok()) {
-        std::fprintf(stderr, "Auth error: %s\n", login_res.error().message.c_str());
+    auto res = qobuz::make_service(acct);
+    if (!res.ok()) {
+        std::fprintf(stderr, "Auth error: %s\n", res.error().message.c_str());
         std::exit(1);
     }
-    return svc;
+    return res.take();
 }
 
 // Find account by country code (or first if country is empty).
@@ -373,6 +370,60 @@ int main(int argc, char **argv) {
             for (auto &r : records)
                 std::printf("%s\n", history::format_record_line(r).c_str());
             std::printf("%zu %s\n", records.size(), i18n::t("records_shown"));
+        });
+    }
+
+    // ── refresh-credentials ───────────────────────────────────────────────────
+    // Manual escape hatch. Downloads already heal a rotated app_secret on
+    // their own (QobuzApiService::get_track_file_url), so this exists for
+    // forcing the issue or repairing a config out of band.
+    std::string rc_country;
+    int rc_account = -1, rc_track = 0;
+    {
+        auto *sub = app.add_subcommand("refresh-credentials",
+                                       i18n::t("cmd_refresh_credentials"));
+        sub->add_option("--country", rc_country, "Account country code");
+        sub->add_option("--account", rc_account, "Account index (GUI)");
+        sub->add_option("--track",   rc_track,
+            "Track ID to validate the new secret against (default: first search hit)");
+
+        sub->callback([&]() {
+            config::Config cur = config::load();
+            const config::Account &acct = (rc_account >= 0)
+                ? select_account_idx(cur, rc_account)
+                : select_account(cur, rc_country);
+            auto svc = build_authenticated_api(acct);
+
+            // The bundle carries one seed per timezone and only one of them
+            // signs correctly, so a candidate is only trustworthy once it has
+            // produced a working getFileUrl. Search is unsigned, so it still
+            // works while the stored secret is dead.
+            std::int64_t probe = rc_track;
+            if (probe <= 0) {
+                auto hits = svc.search_tracks("music", 1, std::nullopt);
+                if (hits.ok() && hits.value().items && !hits.value().items->empty()) {
+                    const auto &first = hits.value().items->front();
+                    if (first && first->id) probe = *first->id;
+                }
+            }
+            if (probe <= 0) {
+                std::fprintf(stderr, "%s\n", i18n::t("creds_no_probe_track"));
+                std::exit(1);
+            }
+
+            auto res = svc.refresh_app_credentials(probe, kb::quality::MP3_320);
+            if (!res.ok()) {
+                std::fprintf(stderr, "%s %s\n", i18n::t("creds_refresh_failed"),
+                             res.error().message.c_str());
+                std::exit(1);
+            }
+
+            // The service's listener already wrote config.toml.
+            std::string secret = svc.app_secret();
+            std::printf("%s\n  app_id     = %s\n  app_secret = %s\n",
+                        i18n::t("creds_refreshed"), svc.app_id().c_str(),
+                        (secret.substr(0, 6) + "…" +
+                         secret.substr(secret.size() >= 4 ? secret.size() - 4 : 0)).c_str());
         });
     }
 

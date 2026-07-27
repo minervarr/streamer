@@ -1,6 +1,7 @@
 #include "search_controller.hh"
 
 #include "config.hh"
+#include "service_factory.hh"
 
 #include <core/models.hh>
 
@@ -10,15 +11,8 @@
 namespace search {
 
 SearchController::SearchController(const config::Account& account) {
-    kb::QobuzApiService::Config cfg;
-    cfg.app_id = account.app_id;
-    cfg.app_secret = account.app_secret;
-    auto res = kb::QobuzApiService::with_credentials(cfg);
-    if (res.ok()) {
-        svc_ = res.take();
-        if (!account.auth_token.empty())
-            svc_->login_with_token(account.user_id, account.auth_token);
-    }
+    auto res = qobuz::make_service(account);
+    if (res.ok()) svc_ = res.take();
 }
 
 namespace {
