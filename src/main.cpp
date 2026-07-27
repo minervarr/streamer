@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
             if (outdir.empty()) outdir = ".";
             int conc = (dl_concurrency > 0) ? dl_concurrency
                                             : static_cast<int>(cur.settings.concurrency);
-            if (conc <= 0) conc = 4;
+            if (conc <= 0) conc = 8;
 
             bool ok = dl::run(svc, dl_url, quality, outdir, acct.country, conc,
                               !dl_no_extras, !dl_no_metadata);

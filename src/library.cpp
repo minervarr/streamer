@@ -387,7 +387,16 @@ void upsert_file(sqlite3 *db, const std::string &root, int64_t track_id,
                  const std::string &country, int64_t now) {
     std::error_code ec;
     auto size = fs::file_size(fs::u8path(path), ec);
+
+    // file_time_type's epoch is unspecified and is not the Unix epoch — on
+    // libstdc++ writing time_since_epoch() straight out lands in the 1800s.
+    // C++20 has file_clock::to_sys; this is the C++17 way.
     auto write_time = fs::last_write_time(fs::u8path(path), ec);
+    auto as_system = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        write_time - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+    int64_t mtime = std::chrono::duration_cast<std::chrono::seconds>(
+                        as_system.time_since_epoch())
+                        .count();
 
     Stmt s(db,
         "INSERT INTO files (track_id,rel_path,format_id,quality,country,bytes,mtime,"
@@ -402,9 +411,7 @@ void upsert_file(sqlite3 *db, const std::string &root, int64_t track_id,
     s.bind(quality);
     if (country.empty()) s.bind_null(); else s.bind(country);
     if (ec) s.bind_null(); else s.bind(static_cast<int64_t>(size));
-    s.bind(static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(write_time.time_since_epoch())
-            .count()));
+    s.bind(mtime);
     s.bind(now);
     s.run();
 }

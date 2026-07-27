@@ -18,7 +18,7 @@ struct Settings {
     std::filesystem::path download_dir;
     std::string  quality             = "flac";
     uint32_t     requests_per_minute = 0;
-    uint32_t     concurrency         = 4;
+    uint32_t     concurrency         = 8;
     std::string  language;
 };
 

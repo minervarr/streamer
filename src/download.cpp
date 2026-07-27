@@ -6,10 +6,13 @@
 #include "library.hh"
 
 #include <cctype>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <api/service.hh>
@@ -52,36 +55,139 @@ static std::string best_cover_url(const kb::Image &img) {
     return {};
 }
 
-// Progress callback for a single track: prints one updating percentage line.
+// ── Progress reporting ──────────────────────────────────────────────────────
+// Downloads are big and can be slow when the CDN edge is cold, so the line has
+// to keep moving on its own — a counter that only ticks when a whole track
+// lands looks identical to a hung process for minutes at a time.
+
+using Clock = std::chrono::steady_clock;
+
+static std::string format_bytes(uint64_t bytes) {
+    char buf[32];
+    if (bytes >= 1024ull * 1024 * 1024)
+        std::snprintf(buf, sizeof(buf), "%.1f GB", bytes / 1073741824.0);
+    else
+        std::snprintf(buf, sizeof(buf), "%.1f MB", bytes / 1048576.0);
+    return buf;
+}
+
+static std::string format_eta(double seconds) {
+    if (!(seconds > 0) || seconds > 86400) return "--:--";
+    int total = static_cast<int>(seconds + 0.5);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%d:%02d", total / 60, total % 60);
+    return buf;
+}
+
+namespace {
+
+// Shared by both progress callbacks. Speed is an EWMA over a few seconds
+// rather than a cumulative average, so the number reflects what the transfer
+// is doing now instead of what it averaged since it started.
+struct ProgressMeter {
+    std::mutex mtx;
+    std::unordered_map<int, std::pair<uint64_t, uint64_t>> per_track;  // id -> {done,total}
+    std::unordered_set<int> finished;
+    int track_count = 0;
+
+    Clock::time_point started = Clock::now();
+    Clock::time_point last_sample = Clock::now();
+    Clock::time_point last_draw{};
+    uint64_t last_bytes = 0;
+    double speed = 0.0;      // bytes/sec, smoothed
+    bool done_printed = false;
+
+    uint64_t downloaded_locked() const {
+        uint64_t sum = 0;
+        for (const auto &[id, p] : per_track) sum += p.first;
+        return sum;
+    }
+
+    // Album byte totals are only known for tracks that have started, so scale
+    // what is known up to the full track count. Flagged approximate in output.
+    uint64_t estimated_total_locked() const {
+        uint64_t known = 0;
+        size_t seen = 0;
+        for (const auto &[id, p] : per_track) {
+            if (p.second > 0) { known += p.second; ++seen; }
+        }
+        if (seen == 0) return 0;
+        if (track_count <= 0 || seen >= static_cast<size_t>(track_count)) return known;
+        return static_cast<uint64_t>(static_cast<double>(known) / seen * track_count);
+    }
+
+    void sample_speed_locked(uint64_t now_bytes) {
+        auto now = Clock::now();
+        double dt = std::chrono::duration<double>(now - last_sample).count();
+        if (dt < 0.25) return;
+        double instant = (now_bytes - last_bytes) / dt;
+        // ~3s time constant.
+        double alpha = 1.0 - std::exp(-dt / 3.0);
+        speed = (speed <= 0.0) ? instant : speed + alpha * (instant - speed);
+        last_sample = now;
+        last_bytes = now_bytes;
+    }
+
+    bool should_draw_locked() {
+        auto now = Clock::now();
+        if (std::chrono::duration<double>(now - last_draw).count() < 0.2) return false;
+        last_draw = now;
+        return true;
+    }
+};
+
+} // namespace
+
+// Single track: percentage plus live speed, so a stalled transfer is visible.
 static kb::TrackProgressFn single_track_progress() {
-    auto last = std::make_shared<std::atomic<int>>(-1);
-    return [last](int, uint64_t dl, uint64_t tot) {
-        if (tot == 0) return;
-        int pct = static_cast<int>(dl * 100 / tot);
-        if (last->exchange(pct) == pct) return;
-        std::printf("\r  %3d%%", pct);
+    auto m = std::make_shared<ProgressMeter>();
+    m->track_count = 1;
+    return [m](int track_id, uint64_t dl, uint64_t tot) {
+        std::lock_guard<std::mutex> lk(m->mtx);
+        m->per_track[track_id] = {dl, tot};
+        m->sample_speed_locked(dl);
+        bool complete = tot > 0 && dl >= tot;
+        if (!complete && !m->should_draw_locked()) return;
+
+        int pct = tot > 0 ? static_cast<int>(dl * 100 / tot) : 0;
+        double remaining = (m->speed > 0 && tot > dl) ? (tot - dl) / m->speed : 0;
+        std::printf("\r  %3d%%  %s  %.1f MB/s  ETA %s   ", pct, format_bytes(dl).c_str(),
+                    m->speed / 1048576.0, format_eta(remaining).c_str());
         std::fflush(stdout);
-        if (pct >= 100) std::printf("\n");
+        if (complete && !m->done_printed) {
+            m->done_printed = true;
+            std::printf("\n");
+        }
     };
 }
 
-// Progress callback for a multi-track album: prints [N/total] once per completed track.
+// Album: aggregate bytes across every concurrent track, with speed and ETA.
 static kb::TrackProgressFn album_progress(int total_tracks) {
-    struct State {
-        std::mutex mtx;
-        std::unordered_set<int> done;
-        int total;
-    };
-    auto s = std::make_shared<State>();
-    s->total = total_tracks;
-    return [s](int track_id, uint64_t dl, uint64_t tot) {
-        if (tot == 0 || dl < tot) return;
-        std::lock_guard<std::mutex> lk(s->mtx);
-        if (!s->done.insert(track_id).second) return;
-        int n = static_cast<int>(s->done.size());
-        std::printf("\r  [%d/%d]", n, s->total);
+    auto m = std::make_shared<ProgressMeter>();
+    m->track_count = total_tracks;
+    return [m](int track_id, uint64_t dl, uint64_t tot) {
+        std::lock_guard<std::mutex> lk(m->mtx);
+        m->per_track[track_id] = {dl, tot};
+        if (tot > 0 && dl >= tot) m->finished.insert(track_id);
+
+        uint64_t done_bytes = m->downloaded_locked();
+        m->sample_speed_locked(done_bytes);
+
+        int n = static_cast<int>(m->finished.size());
+        bool complete = n >= m->track_count;
+        if (!complete && !m->should_draw_locked()) return;
+
+        uint64_t est = m->estimated_total_locked();
+        double remaining = (m->speed > 0 && est > done_bytes) ? (est - done_bytes) / m->speed
+                                                              : 0;
+        std::printf("\r  [%2d/%d]  %s/%s  %.1f MB/s  ETA %s   ", n, m->track_count,
+                    format_bytes(done_bytes).c_str(), format_bytes(est).c_str(),
+                    m->speed / 1048576.0, format_eta(remaining).c_str());
         std::fflush(stdout);
-        if (n >= s->total) std::printf("\n");
+        if (complete && !m->done_printed) {
+            m->done_printed = true;
+            std::printf("\n");
+        }
     };
 }
 
