@@ -1,47 +1,237 @@
 #!/usr/bin/env bash
-# streamer desktop build (Linux). Builds the CLI always, and the
-# Vulkan/Wayland GUI (gui/) when a slangc shader compiler is found.
+# streamer desktop build (Linux) -> <repo>/build/linux (Release) or
+# build/linux_debug (Debug). Builds the CLI always, and the Vulkan/Wayland GUI
+# (gui/) when a slangc shader compiler is found.
 #
 # Dependencies (Arch: pacman / Debian: apt names in parens):
-#   cmake g++ ninja curl                        — toolchain (curl for
-#                                                  CMake FetchContent)
-#   openssl                                      — CLI/GUI networking
-#   wayland wayland-protocols libxkbcommon       — GUI only
+#   cmake >= 3.22, g++ (C++17), ninja, curl   — toolchain (curl for
+#                                                CMake FetchContent)
+#   openssl                                    — CLI/GUI networking
+#   wayland wayland-protocols libxkbcommon     — GUI only
 #     (libwayland-dev wayland-protocols libxkbcommon-dev)
-#   vulkan-icd-loader vulkan-headers             — GUI only
-#     (libvulkan-dev)
+#   vulkan-icd-loader vulkan-headers           — GUI only (libvulkan-dev)
 #   slangc — Slang shader compiler, GUI only: a Vulkan SDK install, or a
 #   standalone release from https://github.com/shader-slang/slang/releases
-#   extracted anywhere and pointed to via -DVCE_SLANGC=/path/to/slangc or
-#   $VULKAN_SDK/bin/slangc.
+#   extracted anywhere and pointed to via $VCE_SLANGC / $VULKAN_SDK/bin/slangc.
 #
 # First time: git submodule update --init --recursive
-set -e
+#
+# Usage: scripts/linux/build.sh [--debug|--release|--share] [--clean]
+#                               [--no-gui] [cmake args...]
+# Passing a mode flag explicitly (scripts, CI) always skips straight to the
+# build — same for non-interactive stdin (defaults to Release, Universal).
+#
+# Run with no mode flag on an interactive terminal and two prompts run in
+# sequence — microarchitecture target, then build type — since they're
+# orthogonal (Native+Debug is a legitimate combination, not just
+# Universal+Release):
+#   Scene 1 — microarch target:
+#     1) Universal (default) -- portable generic x86-64 baseline
+#     2) Native              -- tuned to this exact CPU (-march=native)
+#     3) Custom              -- any -march value (v2/v3/v4/znver4/...)
+#     4) All                 -- build universal/v3/v4/zen4 in one pass
+#   Scene 2 — build type:
+#     1) Release (default)
+#     2) Debug
+#
+# Release: -O3, LTO across every translation unit including the vendored curl
+#   and TagLib, dead-section stripping, NDEBUG. See the optimization block at
+#   the top of the root CMakeLists.txt. Slow to link, fast to run.
+# Debug: -O0 -g, LTO off, assertions live — for actually stepping through it.
+# All (--share): builds the universal binary plus the v3/v4 x86-64 psABI
+#   levels plus a Zen4-tuned one (STREAMER_ARCH_LEVEL in the root
+#   CMakeLists.txt), so you can hand out whichever matches the recipient's CPU
+#   instead of one lowest-common-denominator build. Each variant gets its own
+#   directory under build/linux_share/ (same one-config-per-directory
+#   reasoning as Debug/Release). Release variants are packaged as tarballs
+#   under dist/linux/; Debug variants are left unpackaged — Debug output isn't
+#   the kind of thing you hand someone.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
 
-root="$(cd "$(dirname "$0")/../.." && pwd)"
-build="$root/build"
+BUILD_TYPE=Release
+SHARE=0
+CLEAN=0
+MODE_SET=0
+NO_GUI=0
+ARCH_LEVEL=""
+ARCH_SUFFIX=""
+CMAKE_ARGS=()
 
-# slangc autodetect: env override > VULKAN_SDK > PATH.
-slangc="${VCE_SLANGC:-}"
-if [ -z "$slangc" ]; then
-    for c in "${VULKAN_SDK:+$VULKAN_SDK/bin/slangc}" "$(command -v slangc || true)"; do
-        if [ -n "$c" ] && [ -x "$c" ]; then slangc="$c"; break; fi
-    done
+for arg in "$@"; do
+    case "$arg" in
+        --debug)   BUILD_TYPE=Debug;   MODE_SET=1 ;;
+        --release) BUILD_TYPE=Release; MODE_SET=1 ;;
+        --share)   SHARE=1;            MODE_SET=1 ;;
+        --clean)   CLEAN=1 ;;
+        --no-gui)  NO_GUI=1 ;;
+        *)         CMAKE_ARGS+=("$arg") ;;
+    esac
+done
+
+# No mode flag given: ask, if there's actually someone at the keyboard to
+# answer (stdin a tty) — a non-interactive caller (CI, a pipe) falls through
+# to the Release/Universal default above instead of hanging on `read`.
+if [[ "$MODE_SET" -eq 0 && -t 0 ]]; then
+    echo "Select microarchitecture target:"
+    echo "  1) Universal (default) -- portable generic x86-64 baseline"
+    echo "  2) Native -- tuned to this exact CPU (-march=native)"
+    echo "  3) Custom -- enter a specific -march value (v2/v3/v4/znver4/...)"
+    echo "  4) All -- build universal/v3/v4/zen4 in one pass"
+    read -r -p "Enter choice [1-4, default 1]: " arch_choice
+    case "$arch_choice" in
+        ""|1) ;;
+        2) ARCH_LEVEL="native"; ARCH_SUFFIX="_native" ;;
+        3)
+            read -r -p "Enter -march value (e.g. v3, v4, znver4): " custom_level
+            if [[ -z "$custom_level" ]]; then
+                echo "error: no value entered" >&2
+                exit 2
+            fi
+            ARCH_LEVEL="$custom_level"
+            ARCH_SUFFIX="_custom-${custom_level}"
+            ;;
+        4) SHARE=1 ;;
+        *) echo "error: invalid choice '$arch_choice'" >&2; exit 2 ;;
+    esac
+
+    echo "Select build type:"
+    echo "  1) Release (default)"
+    echo "  2) Debug"
+    read -r -p "Enter choice [1-2, default 1]: " type_choice
+    case "$type_choice" in
+        ""|1) BUILD_TYPE=Release ;;
+        2)    BUILD_TYPE=Debug ;;
+        *)    echo "error: invalid choice '$type_choice'" >&2; exit 2 ;;
+    esac
 fi
 
-extra=()
-if [ -n "$slangc" ]; then
-    extra+=("-DVCE_SLANGC=$slangc" "-DSTREAMER_GUI=ON")
-    echo "==> slangc: $slangc (GUI enabled)"
+# slangc autodetect: env override > VULKAN_SDK > PATH. The root CMakeLists.txt
+# probes for slangc itself to decide STREAMER_GUI's default, but pass the
+# resolved path anyway so vk_canvas's shader step uses the same one this
+# script reported — and so a slangc outside PATH still enables the GUI.
+GUI_ARGS=()
+if [[ "$NO_GUI" -eq 1 ]]; then
+    GUI_ARGS=(-DSTREAMER_GUI=OFF)
+    echo "==> GUI disabled (--no-gui)"
+elif [[ "${CMAKE_ARGS[*]:-}" == *"VCE_SLANGC"* || "${CMAKE_ARGS[*]:-}" == *"STREAMER_GUI"* ]]; then
+    echo "==> GUI settings taken from the arguments passed through"
 else
-    echo "==> slangc not found — building without the GUI"
+    slangc="${VCE_SLANGC:-}"
+    if [[ -z "$slangc" ]]; then
+        for c in "${VULKAN_SDK:+$VULKAN_SDK/bin/slangc}" \
+                 "$(command -v slangc || true)" \
+                 /opt/shader-slang-bin/bin/slangc; do
+            if [[ -n "$c" && -x "$c" ]]; then slangc="$c"; break; fi
+        done
+    fi
+    if [[ -n "$slangc" ]]; then
+        GUI_ARGS=(-DVCE_SLANGC="$slangc" -DSTREAMER_GUI=ON)
+        echo "==> slangc: $slangc (GUI enabled)"
+    else
+        GUI_ARGS=(-DSTREAMER_GUI=OFF)
+        echo "==> slangc not found — building without the GUI"
+    fi
 fi
 
-cmake -S "$root" -B "$build" -DCMAKE_BUILD_TYPE=Release "${extra[@]}"
-cmake --build "$build" -j"$(nproc)"
+# Package one built variant: the two binaries plus the GUI's runtime assets.
+# $build_dir/gui also holds CMakeFiles/ and other build-tree clutter that
+# cp -r'ing the whole directory would drag into the tarball.
+package_variant() {
+    local build_dir="$1" pkg_name="$2" dist_dir="$3"
+    local pkg_dir="$dist_dir/$pkg_name"
+    rm -rf "$pkg_dir"
+    mkdir -p "$pkg_dir"
+    cp "$build_dir/streamer" "$pkg_dir/"
+    if [[ -x "$build_dir/gui/streamer_gui" ]]; then
+        cp "$build_dir/gui/streamer_gui" "$pkg_dir/"
+        cp -r "$build_dir/gui/assets" "$pkg_dir/assets"
+    fi
+    tar -C "$dist_dir" -czf "$dist_dir/$pkg_name.tar.gz" "$pkg_name"
+    rm -rf "$pkg_dir"
+    echo "==> Packaged $dist_dir/$pkg_name.tar.gz"
+}
+
+if [[ "$SHARE" -eq 1 ]]; then
+    # variant name -> STREAMER_ARCH_LEVEL value ("" = compiler default baseline)
+    declare -A SHARE_VARIANTS=(
+        [universal]=""
+        [v3]="v3"
+        [v4]="v4"
+        [zen4]="znver4"
+    )
+
+    if [[ "$BUILD_TYPE" == "Debug" ]]; then
+        SHARE_ROOT=build/linux_share_debug
+    else
+        SHARE_ROOT=build/linux_share
+    fi
+    DIST_DIR=dist/linux
+
+    if [[ "$CLEAN" -eq 1 ]]; then
+        echo "Cleaning $SHARE_ROOT and $DIST_DIR..."
+        rm -rf "$SHARE_ROOT" "$DIST_DIR"
+    fi
+    [[ "$BUILD_TYPE" == "Release" ]] && mkdir -p "$DIST_DIR"
+
+    for variant in "${!SHARE_VARIANTS[@]}"; do
+        level="${SHARE_VARIANTS[$variant]}"
+        variant_dir="$SHARE_ROOT/$variant"
+        arch_arg=()
+        [[ -n "$level" ]] && arch_arg=(-DSTREAMER_ARCH_LEVEL="$level")
+
+        echo
+        echo "==> Configuring '$variant' ($BUILD_TYPE) -> $variant_dir..."
+        cmake -S . -B "$variant_dir" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            "${arch_arg[@]}" "${GUI_ARGS[@]}" "${CMAKE_ARGS[@]}"
+        cmake --build "$variant_dir" -j"$(nproc)"
+
+        if [[ "$BUILD_TYPE" == "Release" ]]; then
+            package_variant "$variant_dir" "streamer-linux-$variant" "$DIST_DIR"
+        else
+            echo "==> Built $variant_dir/streamer (Debug, not packaged)"
+        fi
+    done
+
+    echo
+    if [[ "$BUILD_TYPE" == "Release" ]]; then
+        echo "All-variant build done. Tarballs in $DIST_DIR/:"
+        for variant in "${!SHARE_VARIANTS[@]}"; do
+            echo "  $DIST_DIR/streamer-linux-$variant.tar.gz"
+        done
+    else
+        echo "All-variant build done (Debug, unpackaged). Binaries:"
+        for variant in "${!SHARE_VARIANTS[@]}"; do
+            echo "  $SHARE_ROOT/$variant/streamer"
+        done
+    fi
+    exit 0
+fi
+
+if [[ "$BUILD_TYPE" == "Debug" ]]; then
+    BUILD_DIR="build/linux${ARCH_SUFFIX}_debug"
+else
+    BUILD_DIR="build/linux${ARCH_SUFFIX}"
+fi
+
+if [[ "$CLEAN" -eq 1 && -d "$BUILD_DIR" ]]; then
+    echo "Cleaning $BUILD_DIR..."
+    rm -rf "$BUILD_DIR"
+fi
+
+ARCH_ARG=()
+[[ -n "$ARCH_LEVEL" ]] && ARCH_ARG=(-DSTREAMER_ARCH_LEVEL="$ARCH_LEVEL")
+
+echo "==> Configuring CMake (Ninja, $BUILD_TYPE${ARCH_LEVEL:+, arch=$ARCH_LEVEL}) -> $BUILD_DIR..."
+cmake -S . -B "$BUILD_DIR" -G Ninja \
+    -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+    "${ARCH_ARG[@]}" "${GUI_ARGS[@]}" "${CMAKE_ARGS[@]}"
+cmake --build "$BUILD_DIR" -j"$(nproc)"
 
 echo
-echo "Done: $build/streamer"
-if [ -n "$slangc" ]; then
-    echo "GUI:  $build/gui/streamer_gui"
+echo "Binaries in $BUILD_DIR/:"
+echo "  streamer -- the CLI"
+if [[ -x "$BUILD_DIR/gui/streamer_gui" ]]; then
+    echo "  gui/streamer_gui -- the Vulkan/Wayland GUI (reads gui/assets/ next to it)"
 fi

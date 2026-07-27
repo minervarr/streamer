@@ -5,15 +5,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Configure (vcpkg preset recommended; requires CURL and TagLib available)
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# Linux: the build script. Interactive on a TTY (microarch target, then build
+# type); a mode flag or a non-TTY stdin goes straight to Release/Universal.
+scripts/linux/build.sh [--debug|--release|--share] [--clean] [--no-gui] [cmake args...]
+./build/linux/streamer <subcommand>          # --debug -> build/linux_debug/
 
-# Build
+# Or by hand (equivalent to --release with no arch tuning)
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-
-# Run
 ./build/streamer <subcommand>
 ```
+
+`--share` builds universal/v3/v4/zen4 variants into `build/linux_share/` and packages
+each as a tarball under `dist/linux/`.
+
+Release compiles with `-O3`, LTO across every translation unit (including the vendored
+curl and TagLib — that is where the cycles go), and `--gc-sections`; `CMAKE_BUILD_TYPE`
+defaults to Release when unset, since a bare configure otherwise means `-O0` with no `-g`.
+`-DSTREAMER_ARCH_LEVEL=v3|v4|native|znver4|…` opts into a microarchitecture above the
+portable x86-64 baseline; `-DSTREAMER_LTO=OFF` turns LTO off when link time hurts more
+than run time.
 
 On Windows with vcpkg:
 ```powershell

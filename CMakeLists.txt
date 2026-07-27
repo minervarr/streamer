@@ -4,6 +4,95 @@ project(streamer LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# A bare `cmake -B build` used to configure with no CMAKE_BUILD_TYPE at all,
+# which on single-config generators means *no* optimization flags — not Debug,
+# not Release, just -O0 with no -g. Default to Release.
+get_property(_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT CMAKE_BUILD_TYPE AND NOT _multi_config)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+                 Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
+# ── Release optimization ────────────────────────────────────────────────────
+# Everything here is set before the first add_subdirectory() so the vendored
+# curl / taglib / sqlite3 / KawusapiCC targets inherit it too: a download tool
+# spends most of its cycles inside libcurl and TagLib, not inside src/, so
+# optimizing only our own translation units would miss the hot code.
+
+# Whole-program optimization (GCC/Clang LTO, MSVC /GL+/LTCG): lets the linker
+# inline and dead-strip across translation units instead of stopping at each
+# object boundary. Read at target-creation time, hence before the targets
+# exist. Costs link time; Release only.
+option(STREAMER_LTO "Link-time optimization for Release builds" ON)
+if(STREAMER_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_why)
+    if(_ipo_ok)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    else()
+        message(STATUS "LTO unavailable, continuing without it: ${_ipo_why}")
+    endif()
+endif()
+
+# Optional x86-64 psABI microarchitecture level (v2/v3/v4), "native", or any
+# -march name the compiler knows (znver4, …). Empty (the default) keeps the
+# generic x86-64 baseline: a v4 binary SIGILLs on a CPU without AVX-512, and
+# -march=x86-64-v2/v3/v4 needs GCC 11+ / Clang 12+, so this is opt-in per
+# build rather than something a plain configure turns on:
+#   cmake -B build -DSTREAMER_ARCH_LEVEL=v3
+# Appended to CMAKE_{C,CXX}_FLAGS rather than add_compile_options() so it
+# survives into any nested cmake invocation that forwards those variables.
+set(STREAMER_ARCH_LEVEL "" CACHE STRING
+    "x86-64 target: v2/v3/v4 (psABI level), native, or an -march name. Empty = portable.")
+if(STREAMER_ARCH_LEVEL AND NOT MSVC)
+    if(STREAMER_ARCH_LEVEL MATCHES "^v[1234]$")
+        set(_arch_flag "-march=x86-64-${STREAMER_ARCH_LEVEL}")
+    else()
+        set(_arch_flag "-march=${STREAMER_ARCH_LEVEL}")
+    endif()
+    include(CheckCXXCompilerFlag)
+    # The result variable is cached, so it must be named after the flag being
+    # tested — a fixed name would answer for -march=v3 on a later reconfigure
+    # that asked for -march=nonsense and let the bad flag through.
+    string(MAKE_C_IDENTIFIER "streamer_arch_ok_${_arch_flag}" _arch_flag_ok_var)
+    check_cxx_compiler_flag("${_arch_flag}" ${_arch_flag_ok_var})
+    if(NOT ${_arch_flag_ok_var})
+        message(FATAL_ERROR "Compiler does not support ${_arch_flag} "
+                            "(x86-64-v2/v3/v4 need GCC 11+ or Clang 12+). "
+                            "Leave STREAMER_ARCH_LEVEL unset to build portably.")
+    endif()
+    string(APPEND CMAKE_C_FLAGS   " ${_arch_flag}")
+    string(APPEND CMAKE_CXX_FLAGS " ${_arch_flag}")
+elseif(STREAMER_ARCH_LEVEL AND MSVC)
+    message(WARNING "STREAMER_ARCH_LEVEL is a GCC/Clang flag with no MSVC "
+                    "equivalent (MSVC tops out at /arch:AVX2) — ignored.")
+endif()
+
+if(NOT MSVC)
+    # CMake's Release default is only "-O3 -DNDEBUG". Add the rest: split every
+    # function and variable into its own section so the linker can garbage
+    # collect what LTO proved unreachable, and let the compiler assume no
+    # symbol interposition (these are all static libraries linked into one
+    # executable — nothing can be replaced at load time).
+    add_compile_options(
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:Release>:-ffunction-sections>
+        $<$<CONFIG:Release>:-fdata-sections>
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT APPLE)
+        add_compile_options($<$<CONFIG:Release>:-fno-semantic-interposition>)
+        # --gc-sections drops the collected sections; -O1 is the *linker's*
+        # own optimization level (hash table layout etc.), unrelated to -O
+        # for the compiler; --as-needed keeps DT_NEEDED down to what is used.
+        add_link_options(
+            $<$<CONFIG:Release>:LINKER:--gc-sections>
+            $<$<CONFIG:Release>:LINKER:-O1>
+            $<$<CONFIG:Release>:LINKER:--as-needed>
+        )
+    endif()
+endif()
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY         "${CMAKE_BINARY_DIR}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}")
@@ -125,14 +214,20 @@ if(WIN32)
     target_link_libraries(streamer_core PUBLIC ws2_32 wldap32 crypt32 normaliz)
 endif()
 if(MSVC)
-    target_compile_options(streamer_core PRIVATE /O2 /Ob2 /arch:AVX2 /MP /W3 /utf-8)
+    # /O2 /Ob2 were unconditional here, so a Debug build was compiled
+    # optimized and single-stepped through inlined-away code. Config-guarded.
+    target_compile_options(streamer_core PRIVATE /MP /W3 /utf-8
+        $<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Ob2>
+        $<$<CONFIG:Release>:/arch:AVX2>)
 endif()
 
 # ── streamer executable (CLI) ────────────────────────────────────────────────
 add_executable(streamer src/main.cpp)
 target_link_libraries(streamer PRIVATE streamer_core CLI11::CLI11)
 if(MSVC)
-    target_compile_options(streamer PRIVATE /O2 /Ob2 /arch:AVX2 /MP /W3 /utf-8)
+    target_compile_options(streamer PRIVATE /MP /W3 /utf-8
+        $<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Ob2>
+        $<$<CONFIG:Release>:/arch:AVX2>)
 endif()
 
 # ── legacy GUI (Windows only; preserved as reference until the new gui/ port
