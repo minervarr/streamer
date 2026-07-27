@@ -27,6 +27,7 @@
 #include <api/service.hh>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -275,6 +276,7 @@ int main(int argc, char** argv) {
     int focusedField = -1;
     int loadedAccountIdx = -1;
     int accountListHover = -1;
+    gui::TableInteraction tableInteraction;
 
     enum class Screen { Search, Settings };
     Screen activeScreen = start_settings ? Screen::Settings : Screen::Search;
@@ -298,16 +300,30 @@ int main(int argc, char** argv) {
     FrameInput input;
     bool first_frame = true;
     std::vector<gui::Hit> hits;  // filled by the PREVIOUS frame's draw
+    auto lastFrameTime = std::chrono::steady_clock::now();
+    float lastPointerX = 0.0f, lastPointerY = 0.0f;
 
     while (!host->quit_requested()) {
         input.beginFrame();
         host->pump(/*timeout_ms=*/1000, input);
 
         bool dirty = host->take_dirty();
+        // Plain pointer motion (no click/wheel/key) never sets `dirty` — the
+        // host only marks that on resize — so hover-only feedback (button
+        // hover, table row hover, the ghost popup's hover timer) never
+        // updated without an unrelated click first forcing a redraw. Treat a
+        // moved pointer as its own reason to redraw.
+        bool pointerMoved = input.pointerX != lastPointerX || input.pointerY != lastPointerY;
+        lastPointerX = input.pointerX; lastPointerY = input.pointerY;
         bool interacted = input.pointerWentDown || input.wheelDelta != 0.0f ||
-                          !input.typedCodepoints.empty() || !input.keysWentDown.empty();
+                          !input.typedCodepoints.empty() || !input.keysWentDown.empty() ||
+                          pointerMoved;
         if (!dirty && !interacted && !first_frame) continue;
         first_frame = false;
+
+        auto now = std::chrono::steady_clock::now();
+        float dtSeconds = std::chrono::duration<float>(now - lastFrameTime).count();
+        lastFrameTime = now;
 
         Renderer& r = host->renderer();
         float w = (float)r.width(), h = (float)r.height();
@@ -318,9 +334,10 @@ int main(int argc, char** argv) {
         // switching screens only takes effect below, after dispatch, so the
         // screen that drew `hits` last frame is still the right one to
         // interpret them against.)
-        int hoverRow = -1, hoverHeaderCol = -1;
+        int hoverRow = -1, hoverHeaderCol = -1, hoveredAction = -1;
         for (auto& hit : hits) {
             if (!hit.rect.contains(input.pointerX, input.pointerY)) continue;
+            hoveredAction = hit.action;
             if (activeScreen == Screen::Search) {
                 if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase)
                     hoverHeaderCol = hit.action - gui::ActTableHeaderBase;
@@ -349,8 +366,7 @@ int main(int argc, char** argv) {
                 } else if (hit.action >= gui::ActTableRowBase) {
                     searchCtl.toggle_selected(hit.action - gui::ActTableRowBase);
                 } else if (hit.action == gui::ActDownloadSelected && !searchCtl.selected().empty()) {
-                    std::vector<std::string> ids;
-                    for (int idx : searchCtl.selected()) ids.push_back(searchCtl.results()[(size_t)idx].id);
+                    std::vector<std::string> ids(searchCtl.selected().begin(), searchCtl.selected().end());
                     download_async(account, settingsCtl.config().settings.quality,
                                   settingsCtl.config().settings.download_dir.string(),
                                   account.country,
@@ -408,7 +424,10 @@ int main(int argc, char** argv) {
             widgets::textFieldHandleInput(queryField, input);
             if (input.wheelDelta != 0.0f) {
                 Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
-                tableScrollPx += input.wheelDelta * rowH;
+                // wheelDelta is positive for a physical "scroll up" (toward
+                // earlier content) — that must DECREASE scrollPx (scrollPx=0
+                // is the top of the list), so subtract, not add.
+                tableScrollPx -= input.wheelDelta * rowH;
                 float maxScroll = std::max(0.0f, (float)searchCtl.results().size() * rowH - area.h * 0.5f);
                 tableScrollPx = std::clamp(tableScrollPx, 0.0f, maxScroll);
             }
@@ -475,7 +494,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (input.wheelDelta != 0.0f) {
-                scrollPx += input.wheelDelta * prowH;
+                scrollPx -= input.wheelDelta * prowH;  // see the search table's note on sign
                 float maxScroll = std::max(0.0f, rowCount * prowH - (area.h - prowH));
                 scrollPx = std::clamp(scrollPx, 0.0f, maxScroll);
             }
@@ -486,12 +505,23 @@ int main(int argc, char** argv) {
             widgets::drawSortableTable(canvas, area, cols, previewCell, rowCount,
                                        sortCol, sortAsc, scrollPx, prowH, rHover, hHover);
         } else if (theme_preview) {
+            // Dev tooling: one of each button kind/state, to eyeball the
+            // OLED-friendly bar treatment instead of the old gradient fill.
             float bw = w * 0.18f, bh = h * 0.08f, gap = w * 0.02f;
             float x = w * 0.05f, y = h * 0.08f;
-            for (int i = 0; i < 4; ++i)
-                theme::accentButton(canvas, x + i * (bw + gap), y, bw, bh, "Button", bh * 0.25f);
-            y += bh + h * 0.05f;
-            theme::gradientRect(canvas, x, y, w * 0.9f, h * 0.04f, h * 0.02f);
+            theme::button(canvas, x + 0 * (bw + gap), y, bw, bh, "Primary",
+                         theme::ButtonKind::Primary, {}, bh * 0.25f);
+            theme::button(canvas, x + 1 * (bw + gap), y, bw, bh, "Secondary",
+                         theme::ButtonKind::Secondary, {}, bh * 0.25f);
+            theme::button(canvas, x + 2 * (bw + gap), y, bw, bh, "Danger",
+                         theme::ButtonKind::Danger, {}, bh * 0.25f);
+            theme::button(canvas, x + 3 * (bw + gap), y, bw, bh, "Hovered",
+                         theme::ButtonKind::Primary, {/*hovered=*/true, false, false}, bh * 0.25f);
+            y += bh + h * 0.03f;
+            theme::button(canvas, x + 0 * (bw + gap), y, bw, bh, "Pressed",
+                         theme::ButtonKind::Primary, {true, /*pressed=*/true, false}, bh * 0.25f);
+            theme::button(canvas, x + 1 * (bw + gap), y, bw, bh, "Disabled",
+                         theme::ButtonKind::Primary, {false, false, /*disabled=*/true}, bh * 0.25f);
         } else {
             hits.clear();
 
@@ -505,13 +535,16 @@ int main(int argc, char** argv) {
 
             Rect area = {w * 0.04f, navRow.y + navRow.h + h * 0.02f, w * 0.92f,
                         h * 0.94f - navRow.h - h * 0.02f};
+            gui::PointerState ptr{input.pointerX, input.pointerY, input.pointerDown,
+                                 input.pointerWentDown, input.pointerWentUp};
             if (activeScreen == Screen::Search) {
                 gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/true,
                                  typePickerIndex, tableScrollPx, rowH,
-                                 hoverRow, hoverHeaderCol, hits);
+                                 hoverRow, hoverHeaderCol, hoveredAction,
+                                 ptr, dtSeconds, tableInteraction, hits);
             } else {
                 gui::draw_settings(canvas, area, settingsCtl, settingsFields, focusedField,
-                                   accountListHover, rowH, hits);
+                                   accountListHover, hoveredAction, input.pointerDown, rowH, hits);
             }
         }
 

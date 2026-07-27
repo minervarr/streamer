@@ -7,6 +7,7 @@
 #include "search_controller.hh"
 #include "settings_controller.hh"
 
+#include "animated_float.hh"
 #include "canvas.hh"
 #include "widgets.hh"
 
@@ -15,6 +16,37 @@
 #include <vector>
 
 namespace gui {
+
+// Raw per-frame pointer state, needed by the search table for column-border
+// drag-to-resize and the hover-reveal popup — both live entirely inside
+// draw_search since only it knows the table's live geometry (see
+// TableInteraction below). Everything else in this file works off
+// pre-derived hover ints instead, per the "draws from state, decides
+// nothing" convention this file otherwise follows.
+struct PointerState {
+  float x = 0.0f, y = 0.0f;
+  bool down = false, wentDown = false, wentUp = false;
+};
+
+// Session-only interactive state for the search results table: column
+// widths the user has dragged (seeded from the columns' weights on first
+// use, rescaled proportionally if the table area is resized), an in-progress
+// column-border drag, and the hover-reveal ("ghost") popup for a truncated
+// cell. Owned by the caller (gui_main.cc) across frames, same as
+// tableScrollPx; draw_search both reads and mutates it because the table's
+// geometry — row rects, column boundaries — only exists inside draw_search.
+struct TableInteraction {
+  std::vector<float> columnWidthsPx;
+
+  int   resizeBoundary = -1;  // index of the left column of the dragged boundary, -1 = none
+  float resizeStartX = 0.0f;
+  std::vector<float> resizeStartWidths;
+
+  int   hoverCellRow = -1, hoverCellCol = -1;
+  float hoverAccum = 0.0f;   // seconds the pointer has sat on this cell
+  bool  poppedIn = false;
+  AnimatedFloat popupT{0.0f};  // 0..1 pop-in progress for the ghost popup
+};
 
 enum Action : int {
     ActToggleCheatsheet = 1,
@@ -71,11 +103,17 @@ search::SortColumn sortColumnForTableIndex(int col);
 // open), type picker, sortable results table, selection state, a download
 // button, and any error from the last search. `typePickerIndex` is the
 // caller-owned current selection (0..5, see kTypePickerOptions). `scrollPx`
-// is the caller-owned table scroll offset. Fills `hits` for this frame.
+// is the caller-owned table scroll offset. `hoveredAction` (-1 = none) is
+// whichever Hit's action the pointer sat over last frame, for button
+// hover/press feedback. `pointer`/`dtSeconds`/`table` drive the results
+// table's column-resize drag and hover-reveal popup (see TableInteraction).
+// Fills `hits` for this frame.
 void draw_search(Canvas& c, const Rect& area, const search::SearchController& ctl,
                  const widgets::TextFieldState& queryField, bool queryFocused,
                  int typePickerIndex, float tableScrollPx, float rowH,
-                 int hoverRow, int hoverHeaderCol,
+                 int hoverRow, int hoverHeaderCol, int hoveredAction,
+                 const PointerState& pointer, float dtSeconds,
+                 TableInteraction& table,
                  std::vector<Hit>& hits);
 
 constexpr std::string_view kQualityOptions[] = {"MP3", "FLAC", "FLAC-HI", "FLAC-ULTRA"};
@@ -88,10 +126,12 @@ constexpr int kLanguageCount = 2;
 // Settings screen: account list + edit form, global settings (quality,
 // concurrency, requests/min, download dir, language), save/export/import.
 // `fields` are the caller-owned per-frame text buffers (see SettingsField);
-// `focusedField` (-1 = none) drives which one shows a cursor. Fills `hits`.
+// `focusedField` (-1 = none) drives which one shows a cursor. `hoveredAction`
+// (-1 = none) and `pointerDown` drive button hover/press feedback. Fills
+// `hits`.
 void draw_settings(Canvas& c, const Rect& area, const settings::SettingsController& ctl,
                    const widgets::TextFieldState fields[FieldCount], int focusedField,
-                   int accountListHover, float rowH,
+                   int accountListHover, int hoveredAction, bool pointerDown, float rowH,
                    std::vector<Hit>& hits);
 
 } // namespace gui

@@ -1,7 +1,14 @@
 #include "views.hh"
 #include "theme.hh"
 
+#include "animated_float.hh"
+#include "msdf.hh"       // FontStyle
+#include "text_util.hh"  // truncateToWidth
+
 #include <search.hh>  // search::fmt_duration
+
+#include <algorithm>
+#include <cmath>
 
 namespace gui {
 
@@ -15,6 +22,16 @@ const std::vector<widgets::TableColumn>& searchTableColumns() {
 }
 
 namespace {
+
+// The table draws cells with no shrink (nominal size) and real ellipsis —
+// "cut until the column width" rather than shrinking text down, matching
+// widgets.cc's own cell metrics (s = rowH*0.36f, pad = rowH*0.25f) so the
+// hover-reveal check below tests exactly what got truncated on screen.
+constexpr widgets::TextFit kCellFit{/*shrink=*/false, /*minScale=*/1.0f, /*ellipsis=*/true};
+constexpr float kCellTextScale = 0.36f;
+constexpr float kCellPadScale  = 0.25f;
+constexpr float kResizeStripPx = 6.0f;
+constexpr float kMinColumnPx   = 48.0f;
 
 std::string cellForResult(const search::SearchController& ctl, int row, int col) {
     const auto& r = ctl.results()[(size_t)row];
@@ -64,6 +81,22 @@ int indexForSortColumn(search::SortColumn sc) {
     }
 }
 
+// Hover/press feedback for one button: `action` is the Hit action id this
+// button pushes into `hits` (see gui.hh's Action/SettingsAction enums).
+theme::ButtonState btnState(int hoveredAction, bool pointerDown, int action, bool disabled = false) {
+    bool hov = !disabled && hoveredAction == action;
+    return {hov, hov && pointerDown, disabled};
+}
+
+// Whether `raw` would be truncated by kCellFit inside a cell `cellW` wide —
+// mirrors widgets.cc's drawSortableTable cell metrics exactly so this tests
+// what actually got drawn, not an approximation of it.
+bool cellIsTruncated(Canvas& c, const std::string& raw, float cellW, float rowH) {
+    float size = rowH * kCellTextScale;
+    float maxW = cellW - rowH * kCellPadScale * 2.0f;
+    return truncateToWidth(c, raw, maxW, size, FontStyle::Roman) != raw;
+}
+
 } // namespace
 
 // Exposed so gui_main.cc's click dispatch can map a header hit back to the
@@ -73,7 +106,9 @@ search::SortColumn sortColumnForTableIndex(int col) { return sortColumnForIndex(
 void draw_search(Canvas& c, const Rect& area, const search::SearchController& ctl,
                  const widgets::TextFieldState& queryField, bool queryFocused,
                  int typePickerIndex, float tableScrollPx, float rowH,
-                 int hoverRow, int hoverHeaderCol,
+                 int hoverRow, int hoverHeaderCol, int hoveredAction,
+                 const PointerState& pointer, float dtSeconds,
+                 TableInteraction& table,
                  std::vector<Hit>& hits) {
     float pad = area.h * 0.015f;
     float y = area.y;
@@ -88,8 +123,12 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
     widgets::drawTextField(c, fieldRect, queryField, queryFocused,
                            "Search... (try: artist:\"name\" year:2020-2024)",
                            theme::kTextField);
-    theme::accentButton(c, cheatRect.x, cheatRect.y, cheatRect.w, cheatRect.h, "?", fieldH * 0.2f);
-    theme::accentButton(c, submitRect.x, submitRect.y, submitRect.w, submitRect.h, "Search", fieldH * 0.2f);
+    theme::button(c, cheatRect.x, cheatRect.y, cheatRect.w, cheatRect.h, "?",
+                 ctl.cheatsheet_open() ? theme::ButtonKind::Primary : theme::ButtonKind::Secondary,
+                 btnState(hoveredAction, pointer.down, ActToggleCheatsheet), fieldH * 0.2f);
+    theme::button(c, submitRect.x, submitRect.y, submitRect.w, submitRect.h, "Search",
+                 theme::ButtonKind::Primary, btnState(hoveredAction, pointer.down, ActSubmitSearch),
+                 fieldH * 0.2f);
     hits.push_back({cheatRect, ActToggleCheatsheet});
     hits.push_back({submitRect, ActSubmitSearch});
     y += fieldH + pad;
@@ -123,7 +162,7 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
 
     // ── Error from the last search, if any ──────────────────────────────────
     if (!ctl.last_error().empty()) {
-        c.text(ctl.last_error(), area.x, y, rowH * 0.34f, theme::kAccentHi);
+        c.text(ctl.last_error(), area.x, y, rowH * 0.34f, theme::kDanger);
         y += rowH * 0.7f;
     }
 
@@ -133,30 +172,169 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
     auto cols = searchTableColumns();
     widgets::TableStyle tstyle;
     tstyle.headerBg = theme::kPanel; tstyle.headerText = theme::kText;
-    tstyle.headerHover = theme::kTrack; tstyle.sortGlyph = theme::kAccentLo;
+    tstyle.headerHover = theme::kTrack; tstyle.sortGlyph = theme::kAccent;
     tstyle.rowBg = theme::kPanel; tstyle.rowText = theme::kText;
     tstyle.hoverBg = theme::kTrack; tstyle.gridLine = theme::kDim;
+    tstyle.radius = 0.0f;    // sharp corners — a real table, not a rounded card
+    tstyle.fullGrid = true;  // column separators + row lines through the body
+
+    Rect header = widgets::tableHeaderRow(tableArea, rowH);
+
+    // ── Column widths: lazy-seed from weights, rescale on area resize ───────
+    if (table.columnWidthsPx.size() != cols.size()) {
+        table.columnWidthsPx.clear();
+        for (auto& r : widgets::tableHeaderColumnRects(header, cols))
+            table.columnWidthsPx.push_back(r.w);
+        table.resizeBoundary = -1;
+    } else {
+        float sum = 0.0f;
+        for (float wpx : table.columnWidthsPx) sum += wpx;
+        if (sum > 0.0f && std::abs(sum - tableArea.w) > 0.5f) {
+            float k = tableArea.w / sum;
+            for (float& wpx : table.columnWidthsPx) wpx *= k;
+        }
+    }
+
+    // ── Column-border drag-to-resize (lives here: only this function knows
+    // the header's live geometry each frame) ───────────────────────────────
+    {
+        auto liveCols = widgets::tableHeaderColumnRects(header, cols, &table.columnWidthsPx);
+        if (table.resizeBoundary >= 0) {
+            if (!pointer.down) {
+                table.resizeBoundary = -1;
+            } else {
+                size_t b = (size_t)table.resizeBoundary;
+                float delta = pointer.x - table.resizeStartX;
+                float leftW  = table.resizeStartWidths[b] + delta;
+                float rightW = table.resizeStartWidths[b + 1] - delta;
+                if (leftW < kMinColumnPx)  { rightW -= (kMinColumnPx - leftW); leftW = kMinColumnPx; }
+                if (rightW < kMinColumnPx) { leftW -= (kMinColumnPx - rightW); rightW = kMinColumnPx; }
+                if (leftW >= kMinColumnPx && rightW >= kMinColumnPx) {
+                    table.columnWidthsPx[b] = leftW;
+                    table.columnWidthsPx[b + 1] = rightW;
+                }
+            }
+        } else if (pointer.wentDown && pointer.y >= header.y && pointer.y <= header.y + header.h) {
+            for (size_t b = 1; b < liveCols.size(); b++) {
+                if (std::abs(pointer.x - liveCols[b].x) <= kResizeStripPx * 0.5f) {
+                    table.resizeBoundary = (int)b - 1;
+                    table.resizeStartX = pointer.x;
+                    table.resizeStartWidths = table.columnWidthsPx;
+                    break;
+                }
+            }
+        }
+    }
 
     int rowCount = (int)ctl.results().size();
     auto cellFn = [&ctl](int row, int col) { return cellForResult(ctl, row, col); };
     auto visibleRows = widgets::drawSortableTable(
         c, tableArea, cols, cellFn, rowCount,
         indexForSortColumn(ctl.sort_column()), ctl.sort_ascending(),
-        tableScrollPx, rowH, hoverRow, hoverHeaderCol, tstyle);
+        tableScrollPx, rowH, hoverRow, hoverHeaderCol, tstyle,
+        kCellFit, &table.columnWidthsPx);
 
-    Rect header = widgets::tableHeaderRow(tableArea, rowH);
-    auto headerCols = widgets::tableHeaderColumnRects(header, cols);
-    for (size_t i = 0; i < headerCols.size(); i++)
-        hits.push_back({headerCols[i], ActTableHeaderBase + (int)i});
+    // Resize-boundary indicator: a thin accent line spanning header+body,
+    // shown while hovering a boundary or actively dragging it.
+    {
+        auto liveCols = widgets::tableHeaderColumnRects(header, cols, &table.columnWidthsPx);
+        for (size_t b = 1; b < liveCols.size(); b++) {
+            bool near = pointer.y >= header.y && pointer.y <= tableArea.y + tableArea.h &&
+                       std::abs(pointer.x - liveCols[b].x) <= kResizeStripPx * 0.5f;
+            if (near || table.resizeBoundary == (int)b - 1)
+                c.rect(liveCols[b].x - 1.0f, header.y, 2.0f, tableArea.h, theme::kAccent);
+        }
+
+        // Header hit-rects for sort clicks: inset by half the resize strip
+        // on boundary-adjacent edges so a drag-to-resize click never also
+        // toggles a sort (gui_main.cc dispatches those on pointerWentDown
+        // against these exact rects, one frame after they're pushed here).
+        for (size_t i = 0; i < liveCols.size(); i++) {
+            Rect hit = liveCols[i];
+            if (i > 0) { hit.x += kResizeStripPx * 0.5f; hit.w -= kResizeStripPx * 0.5f; }
+            if (i + 1 < liveCols.size()) hit.w -= kResizeStripPx * 0.5f;
+            hits.push_back({hit, ActTableHeaderBase + (int)i});
+        }
+    }
     for (auto& vr : visibleRows)
         hits.push_back({vr.rect, ActTableRowBase + vr.index});
+
+    // ── Hover-reveal ("ghost") popup for a truncated cell ───────────────────
+    {
+        int newRow = -1, newCol = -1;
+        if (hoverRow >= 0) {
+            for (auto& vr : visibleRows) {
+                if (vr.index != hoverRow) continue;
+                auto cellRects = widgets::tableHeaderColumnRects(vr.rect, cols, &table.columnWidthsPx);
+                for (size_t ci = 0; ci < cellRects.size(); ci++) {
+                    if (cellRects[ci].contains(pointer.x, pointer.y)) { newRow = hoverRow; newCol = (int)ci; break; }
+                }
+                break;
+            }
+        }
+        if (newRow != table.hoverCellRow || newCol != table.hoverCellCol) {
+            table.hoverCellRow = newRow; table.hoverCellCol = newCol;
+            table.hoverAccum = 0.0f;
+            table.poppedIn = false;
+            table.popupT.set(0.0f, 0.08f, easeInOutCubic);
+        } else if (newRow >= 0) {
+            table.hoverAccum += dtSeconds;
+        }
+        if (table.hoverAccum > 0.15f && !table.poppedIn) {
+            table.poppedIn = true;
+            table.popupT.set(1.0f, 0.12f, easeInOutCubic);
+        }
+        table.popupT.update(dtSeconds);
+
+        if (table.hoverCellRow >= 0 && table.popupT.value() > 0.001f) {
+            for (auto& vr : visibleRows) {
+                if (vr.index != table.hoverCellRow) continue;
+                auto cellRects = widgets::tableHeaderColumnRects(vr.rect, cols, &table.columnWidthsPx);
+                if ((size_t)table.hoverCellCol >= cellRects.size()) break;
+                const Rect& cell = cellRects[(size_t)table.hoverCellCol];
+                std::string raw = cellFn(table.hoverCellRow, table.hoverCellCol);
+                if (!cellIsTruncated(c, raw, cell.w, rowH)) break;
+
+                float t = table.popupT.value();
+                float popupSize = rowH * 0.5f;
+                float popupPad = rowH * 0.25f;
+                float popupW = c.textWidth(raw, popupSize) + popupPad * 2.0f;
+                float popupH = rowH * 1.1f;
+                float px = std::clamp(cell.x, tableArea.x, tableArea.x + tableArea.w - popupW);
+                float riseOffset = (1.0f - t) * rowH * 0.3f;
+                // Prefer floating above the cell; flip below when the row is
+                // too close to the table's top edge for that to fit.
+                bool above = (cell.y - popupH - rowH * 0.15f) >= tableArea.y;
+                float py = above ? (cell.y - popupH - rowH * 0.15f + riseOffset)
+                                 : (cell.y + rowH + rowH * 0.15f - riseOffset);
+
+                float scale = 0.85f + 0.15f * t;
+                float sw = popupW * scale, sh = popupH * scale;
+                float sx = px + (popupW - sw) * 0.5f, sy = py + (popupH - sh) * 0.5f;
+
+                c.occlude(sx, sy, sw, sh);
+                Color panelC = {theme::kPanel.r, theme::kPanel.g, theme::kPanel.b, 0.94f * t};
+                c.rect(sx, sy, sw, sh, panelC, rowH * 0.15f);
+                Color barC = {theme::kAccent.r, theme::kAccent.g, theme::kAccent.b, t};
+                c.rect(sx, sy + sh - rowH * 0.05f, sw, rowH * 0.05f, barC);
+                Color textC = {theme::kText.r, theme::kText.g, theme::kText.b, t};
+                float drawSize = popupSize * scale;
+                c.textCentered(raw, sx + sw * 0.5f, sy + (sh - drawSize) * 0.5f, drawSize, textC);
+                break;
+            }
+        }
+    }
 
     y = tableArea.y + tableArea.h + pad;
 
     // ── Bottom bar: selection count + download button ──────────────────────
     Rect dlRect = {area.x, y, area.w * 0.2f, bottomBarH};
-    theme::accentButton(c, dlRect.x, dlRect.y, dlRect.w, dlRect.h,
-                        "Download (" + std::to_string(ctl.selected().size()) + ")", bottomBarH * 0.2f);
+    bool dlDisabled = ctl.selected().empty();
+    theme::button(c, dlRect.x, dlRect.y, dlRect.w, dlRect.h,
+                 "Download (" + std::to_string(ctl.selected().size()) + ")",
+                 theme::ButtonKind::Primary,
+                 btnState(hoveredAction, pointer.down, ActDownloadSelected, dlDisabled),
+                 bottomBarH * 0.2f);
     hits.push_back({dlRect, ActDownloadSelected});
 }
 
@@ -170,7 +348,7 @@ void labeledField(Canvas& c, const Rect& row, std::string_view label,
     float fieldW = row.w * 0.68f;
     Rect labelZone = {row.x, row.y, row.w - fieldW - row.h * 0.3f, row.h};
     Rect fieldRect = {row.x + row.w - fieldW, row.y, fieldW, row.h};
-    c.text(label, labelZone.x, labelZone.y + row.h * 0.3f, row.h * 0.4f, theme::kText);
+    c.text(label, labelZone.x, labelZone.y + row.h * 0.3f, row.h * 0.4f, theme::kDim);
     widgets::drawTextField(c, fieldRect, field, focused, "", theme::kTextField);
     hits.push_back({fieldRect, action});
 }
@@ -185,7 +363,7 @@ std::string accountLabel(const config::Account& a, int idx) {
 
 void draw_settings(Canvas& c, const Rect& area, const settings::SettingsController& ctl,
                    const widgets::TextFieldState fields[FieldCount], int focusedField,
-                   int accountListHover, float rowH,
+                   int accountListHover, int hoveredAction, bool pointerDown, float rowH,
                    std::vector<Hit>& hits) {
     float pad = rowH * 0.3f;
     float y = area.y;
@@ -196,7 +374,7 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
     // ── Left column: accounts ────────────────────────────────────────────────
     {
         float ly = leftCol.y;
-        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Accounts", theme::kAccentLo);
+        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Accounts", theme::kText);
         ly += rowH * 1.1f;
 
         std::vector<std::string> labels;
@@ -211,13 +389,17 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
 
         Rect addRect = {leftCol.x, ly, leftCol.w * 0.48f, rowH};
         Rect delRect = {leftCol.x + leftCol.w * 0.52f, ly, leftCol.w * 0.48f, rowH};
-        widgets::drawFitButton(c, addRect, "Add Account", theme::kPanel, theme::kText, rowH * 0.2f);
-        widgets::drawFitButton(c, delRect, "Remove", theme::kPanel, theme::kText, rowH * 0.2f);
+        theme::button(c, addRect.x, addRect.y, addRect.w, addRect.h, "Add Account",
+                     theme::ButtonKind::Secondary, btnState(hoveredAction, pointerDown, ActAddAccount),
+                     rowH * 0.2f);
+        theme::button(c, delRect.x, delRect.y, delRect.w, delRect.h, "Remove",
+                     theme::ButtonKind::Danger, btnState(hoveredAction, pointerDown, ActRemoveAccount),
+                     rowH * 0.2f);
         hits.push_back({addRect, ActAddAccount});
         hits.push_back({delRect, ActRemoveAccount});
         ly += rowH + pad * 1.5f;
 
-        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Account details", theme::kAccentLo);
+        widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Account details", theme::kText);
         ly += rowH * 1.1f;
 
         Rect row = {leftCol.x, ly, leftCol.w, rowH};
@@ -235,15 +417,20 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
         row.y += rowH * 1.3f;
 
         Rect loginRect = {row.x, row.y, leftCol.w * 0.5f, rowH};
-        theme::accentButton(c, loginRect.x, loginRect.y, loginRect.w, loginRect.h,
-                            "Login with Token", rowH * 0.2f);
+        theme::button(c, loginRect.x, loginRect.y, loginRect.w, loginRect.h, "Login with Token",
+                     theme::ButtonKind::Primary, btnState(hoveredAction, pointerDown, ActLoginWithToken),
+                     rowH * 0.2f);
         hits.push_back({loginRect, ActLoginWithToken});
         row.y += rowH * 1.3f;
 
         Rect expRect = {row.x, row.y, leftCol.w * 0.48f, rowH};
         Rect impRect = {row.x + leftCol.w * 0.52f, row.y, leftCol.w * 0.48f, rowH};
-        widgets::drawFitButton(c, expRect, "Export Accounts", theme::kPanel, theme::kText, rowH * 0.2f);
-        widgets::drawFitButton(c, impRect, "Import Accounts", theme::kPanel, theme::kText, rowH * 0.2f);
+        theme::button(c, expRect.x, expRect.y, expRect.w, expRect.h, "Export Accounts",
+                     theme::ButtonKind::Secondary, btnState(hoveredAction, pointerDown, ActExportAccounts),
+                     rowH * 0.2f);
+        theme::button(c, impRect.x, impRect.y, impRect.w, impRect.h, "Import Accounts",
+                     theme::ButtonKind::Secondary, btnState(hoveredAction, pointerDown, ActImportAccounts),
+                     rowH * 0.2f);
         hits.push_back({expRect, ActExportAccounts});
         hits.push_back({impRect, ActImportAccounts});
     }
@@ -251,7 +438,7 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
     // ── Right column: global settings ───────────────────────────────────────
     {
         float ry = rightCol.y;
-        widgets::drawGroupHeader(c, {rightCol.x, ry, rightCol.w, rowH}, "Global Settings", theme::kAccentLo);
+        widgets::drawGroupHeader(c, {rightCol.x, ry, rightCol.w, rowH}, "Global Settings", theme::kText);
         ry += rowH * 1.1f;
 
         Rect qualityRow = {rightCol.x, ry, rightCol.w, rowH};
@@ -280,7 +467,9 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
         labeledField(c, dirRow, "Download Dir", fields[FieldDownloadDir],
                     focusedField == FieldDownloadDir, hits, ActFieldFocusBase + FieldDownloadDir);
         Rect browseRect = {dirRow.x, dirRow.y + rowH * 1.15f, rightCol.w * 0.3f, rowH};
-        widgets::drawFitButton(c, browseRect, "Browse...", theme::kPanel, theme::kText, rowH * 0.2f);
+        theme::button(c, browseRect.x, browseRect.y, browseRect.w, browseRect.h, "Browse...",
+                     theme::ButtonKind::Secondary, btnState(hoveredAction, pointerDown, ActBrowseDownloadDir),
+                     rowH * 0.2f);
         hits.push_back({browseRect, ActBrowseDownloadDir});
         ry += rowH * 2.45f;
 
@@ -292,13 +481,15 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
         ry += rowH * 1.3f;
 
         Rect saveRect = {rightCol.x, ry, rightCol.w * 0.3f, rowH * 1.2f};
-        theme::accentButton(c, saveRect.x, saveRect.y, saveRect.w, saveRect.h,
-                            ctl.dirty() ? "Save*" : "Save", rowH * 0.2f);
+        theme::button(c, saveRect.x, saveRect.y, saveRect.w, saveRect.h,
+                     ctl.dirty() ? "Save*" : "Save", theme::ButtonKind::Primary,
+                     btnState(hoveredAction, pointerDown, ActSettingsSave, !ctl.dirty()),
+                     rowH * 0.2f);
         hits.push_back({saveRect, ActSettingsSave});
         ry += rowH * 1.6f;
 
         if (!ctl.last_error().empty())
-            c.text(ctl.last_error(), rightCol.x, ry, rowH * 0.32f, theme::kAccentHi);
+            c.text(ctl.last_error(), rightCol.x, ry, rowH * 0.32f, theme::kDanger);
     }
 }
 

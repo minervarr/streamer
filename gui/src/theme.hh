@@ -1,27 +1,28 @@
 #pragma once
 // Streamer's visual identity — single source of truth, shared by every
-// screen (mirrors scanersito's gui/src/theme.hh pattern). Black background,
-// white text, everything else (buttons, highlights, sliders, borders) drawn
-// with the green->red accent gradient.
-//
-// Gradient fills need Canvas::useShapes() (the SDF fast path) — see
-// Canvas::rectGradient()'s doc comment in canvas.hh. Callers must have set
-// canvas.useShapes(&shapeVerts) before drawing gradient UI, and pass
-// shapeVerts to Renderer::draw()'s shapeVerts argument.
+// screen. Black background, white text; every button shares one flat
+// treatment (a `kPanel` fill plus a thin accent-colored bar) instead of a
+// gradient fill — a large solid-bright button is the worst case for OLED
+// panels (constant per-pixel current draw, plus burn-in risk on static
+// chrome like buttons and headers), so fills stay dark and only a 2-4px bar
+// carries color. `kAccent` marks primary/interactive actions; `kDanger` is
+// reserved for destructive actions and error text only.
 
 #include "canvas.hh"
 #include "widgets.hh"
+
+#include <algorithm>
 
 namespace theme {
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 inline constexpr Color kBackground = {0.0f, 0.0f, 0.0f, 1.0f};  // #000000
 inline constexpr Color kText       = {1.0f, 1.0f, 1.0f, 1.0f};  // #ffffff
-inline constexpr Color kAccentLo   = {0.0f, 1.0f, 0.0f, 1.0f};  // #00ff00
-inline constexpr Color kAccentHi   = {1.0f, 0.0f, 0.0f, 1.0f};  // #ff0000
+inline constexpr Color kAccent     = col::green;  // single primary-action accent
+inline constexpr Color kDanger     = col::red;    // destructive actions / errors only
 
 // Panels/tracks/dim text need to read against pure black without being
-// invisible or clashing with the gradient — desaturated grays, not part of
+// invisible or clashing with the accent — desaturated grays, not part of
 // the accent family.
 inline constexpr Color kPanel = {0.12f, 0.12f, 0.12f, 1.0f};
 inline constexpr Color kTrack = {0.22f, 0.22f, 0.22f, 1.0f};
@@ -29,17 +30,18 @@ inline constexpr Color kDim   = {0.55f, 0.55f, 0.55f, 1.0f};
 
 // Widget style structs wired to the palette above, ready to pass to any
 // widgets:: draw call in place of the k*Default ones.
-inline constexpr widgets::ToggleStyle kToggle{kAccentLo, kTrack, kText};
+inline constexpr widgets::ToggleStyle kToggle{kAccent, kTrack, kText};
 inline constexpr widgets::StepperStyle kStepper{kPanel, kText, kTrack, kText};
-inline constexpr widgets::SliderStyle kSlider{kTrack, kAccentLo, kText, kDim};
-inline constexpr widgets::SegmentedStyle kSegmented{kAccentLo, kPanel, kBackground, kDim};
+inline constexpr widgets::SliderStyle kSlider{kTrack, kAccent, kText, kDim};
+inline constexpr widgets::SegmentedStyle kSegmented{kAccent, kPanel, kBackground, kDim};
 inline constexpr widgets::DropdownStyle kDropdown{kText, kTrack, kPanel, kText, kDim};
-inline constexpr widgets::TextFieldStyle kTextField{kTrack, kText, kDim, kAccentLo};
+inline constexpr widgets::TextFieldStyle kTextField{kTrack, kText, kDim, kAccent};
 inline constexpr widgets::ScrollListStyle kScrollList{
     /*background=*/kPanel, /*rowText=*/kText, /*hoverBg=*/kTrack,
     /*selection=*/widgets::ListSelectionStyle::Pill,
-    /*pillColor=*/kAccentLo, /*pillText=*/kBackground,
-    /*borderSelected=*/kAccentLo, /*borderUnselected=*/kDim,
+    /*pillColor=*/kAccent, /*pillText=*/kBackground,
+    /*borderSelected=*/kAccent, /*borderUnselected=*/kDim,
+    /*selectedBar=*/kAccent,
 };
 
 // ── Type scale ───────────────────────────────────────────────────────────────
@@ -54,33 +56,50 @@ struct TypeScale {
   }
 };
 
-// ── Gradient helper ──────────────────────────────────────────────────────────
-// Draws a rect filled with the accent gradient (green -> red). `t0`/`t1` let
-// a caller show only a slice of the gradient (e.g. a progress bar fills
-// green->red as it advances, rather than every bar showing the full range).
-inline Color lerp(Color a, Color b, float t) {
-  return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t,
-          a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t};
+// ── Buttons ──────────────────────────────────────────────────────────────────
+// One flat, OLED-friendly treatment for every button in the app: a `kPanel`
+// fill (never a large bright area) plus a thin accent-colored bar marking
+// what kind of action it is — Primary (the one main action per screen/row),
+// Secondary (everything else) or Danger (destructive). Hover/press lighten
+// the bar and step the fill to `kTrack`, momentarily — nothing stays bright.
+enum class ButtonKind { Primary, Secondary, Danger };
+
+struct ButtonState {
+  bool hovered  = false;
+  bool pressed  = false;
+  bool disabled = false;
+};
+
+// Nudges a color toward white by `t` (0..1) — used only to lift the accent
+// bar a little on hover/press, never to fill the button itself.
+inline Color brighten(Color c, float t) {
+  return {c.r + (1.0f - c.r) * t, c.g + (1.0f - c.g) * t,
+          c.b + (1.0f - c.b) * t, c.a};
 }
 
-inline void gradientRect(Canvas& c, float x, float y, float w, float h,
-                         float radius = 0.0f, float t0 = 0.0f, float t1 = 1.0f) {
-  Color from = lerp(kAccentLo, kAccentHi, t0);
-  Color to   = lerp(kAccentLo, kAccentHi, t1);
-  c.rectGradient(x, y, w, h, from, to, Canvas::GradientDir::Horizontal, radius);
-}
-
-// Shared button primitive: gradient fill, white label, used for every
-// primary action across both screens (Search's "Download Selected", "?"
-// cheatsheet toggle, Settings' "Save", etc). Secondary/inactive buttons
-// should use widgets::drawFitButton with kPanel/kTrack instead — the
-// gradient is reserved for the primary action per screen so it doesn't lose
-// meaning by appearing everywhere.
-inline void accentButton(Canvas& c, float x, float y, float w, float h,
-                         std::string_view label, float radius = 0.0f) {
-  gradientRect(c, x, y, w, h, radius);
+inline void button(Canvas& c, float x, float y, float w, float h,
+                   std::string_view label, ButtonKind kind = ButtonKind::Secondary,
+                   ButtonState state = {}, float radius = 0.0f) {
+  Color barColor = kind == ButtonKind::Primary ? kAccent
+                  : kind == ButtonKind::Danger  ? kDanger
+                                                : kDim;
+  Color bg = kPanel;
+  Color labelColor = kText;
+  if (state.disabled) {
+    barColor = kDim;
+    labelColor = kDim;
+  } else if (state.pressed) {
+    bg = kTrack;
+    barColor = brighten(barColor, 0.65f);
+  } else if (state.hovered) {
+    bg = kTrack;
+    barColor = brighten(barColor, 0.35f);
+  }
+  c.rect(x, y, w, h, bg, radius);
+  float barThick = std::clamp(h * 0.06f, 2.0f, 4.0f);
+  c.rect(x, y, barThick, h, barColor, radius);
   float s = h * 0.34f;
-  c.textCentered(label, x + w * 0.5f, y + (h - s) * 0.5f, s, kText);
+  c.textCentered(label, x + w * 0.5f, y + (h - s) * 0.5f, s, labelColor);
 }
 
 } // namespace theme

@@ -54,9 +54,13 @@ public:
     SortColumn sort_column() const { return sort_col_; }
     bool sort_ascending() const { return sort_asc_; }
 
+    // Selection is keyed by each result's stable `id`, not its row index —
+    // sort() reorders results_ in place, so an index-based selection would
+    // silently follow whatever row lands at that position instead of the
+    // item the user actually picked.
     void toggle_selected(int index);
-    bool is_selected(int index) const { return selected_.count(index) != 0; }
-    const std::set<int>& selected() const { return selected_; }
+    bool is_selected(int index) const;
+    const std::set<std::string>& selected() const { return selected_ids_; }
     void clear_selection();
 
     void toggle_cheatsheet() { cheatsheet_open_ = !cheatsheet_open_; ++revision_; }
@@ -73,7 +77,7 @@ private:
     std::string last_error_;
     SortColumn sort_col_ = SortColumn::None;
     bool sort_asc_ = true;
-    std::set<int> selected_;
+    std::set<std::string> selected_ids_;
     bool cheatsheet_open_ = false;
     uint64_t revision_ = 0;
 

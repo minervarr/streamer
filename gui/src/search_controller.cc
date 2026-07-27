@@ -205,13 +205,20 @@ void SearchController::applySort() {
 }
 
 void SearchController::toggle_selected(int index) {
-    if (selected_.count(index)) selected_.erase(index);
-    else selected_.insert(index);
+    if (index < 0 || (size_t)index >= results_.size()) return;
+    const std::string& id = results_[(size_t)index].id;
+    if (selected_ids_.count(id)) selected_ids_.erase(id);
+    else selected_ids_.insert(id);
     ++revision_;
 }
 
+bool SearchController::is_selected(int index) const {
+    if (index < 0 || (size_t)index >= results_.size()) return false;
+    return selected_ids_.count(results_[(size_t)index].id) != 0;
+}
+
 void SearchController::clear_selection() {
-    if (!selected_.empty()) { selected_.clear(); ++revision_; }
+    if (!selected_ids_.empty()) { selected_ids_.clear(); ++revision_; }
 }
 
 } // namespace search
