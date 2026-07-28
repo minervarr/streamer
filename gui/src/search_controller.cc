@@ -1,6 +1,8 @@
 #include "search_controller.hh"
 
 #include "config.hh"
+#include "download.hh"
+#include "library.hh"
 #include "service_factory.hh"
 
 #include <core/models.hh>
@@ -231,6 +233,7 @@ void ApplySort(std::vector<query_dsl::SearchResult>& results, const std::vector<
 void SearchController::toggle_selected(int index) {
     if (index < 0 || (size_t)index >= results_.size()) return;
     const std::string& id = results_[(size_t)index].id;
+    if (downloaded_ids_.count(id)) return;  // already on disk — not selectable
     if (selected_ids_.count(id)) selected_ids_.erase(id);
     else selected_ids_.insert(id);
     ++revision_;
@@ -243,6 +246,32 @@ bool SearchController::is_selected(int index) const {
 
 void SearchController::clear_selection() {
     if (!selected_ids_.empty()) { selected_ids_.clear(); ++revision_; }
+}
+
+void SearchController::refresh_downloaded(const std::string& download_dir,
+                                          const std::string& quality) {
+    std::vector<std::string> track_ids, album_ids;
+    for (const auto& r : results_) {
+        if (r.type == "track") track_ids.push_back(r.id);
+        else if (r.type == "album") album_ids.push_back(r.id);
+    }
+
+    std::set<std::string> next;
+    int format_id = dl::quality_to_format_id(quality);
+    for (auto& id : library::downloaded_track_ids(download_dir, track_ids, format_id))
+        next.insert(id);
+    for (auto& id : library::downloaded_album_ids(download_dir, album_ids, format_id))
+        next.insert(id);
+
+    if (next != downloaded_ids_) {
+        downloaded_ids_ = std::move(next);
+        ++revision_;
+    }
+}
+
+bool SearchController::is_downloaded(int index) const {
+    if (index < 0 || (size_t)index >= results_.size()) return false;
+    return downloaded_ids_.count(results_[(size_t)index].id) != 0;
 }
 
 } // namespace search

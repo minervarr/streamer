@@ -11,6 +11,7 @@
 #include "config.hh"
 #include "download.hh"
 #include "host.hh"
+#include "library.hh"
 #include "query_dsl.hh"
 #include "search_controller.hh"
 #include "service_factory.hh"
@@ -31,6 +32,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -202,6 +206,110 @@ int run_selftest() {
         check(field2.cursorByte == 2, "cursor lands after 'u', not mid-codepoint");
     }
 
+    // ── Text-field selection/clipboard/word-jump shortcuts ──────────────────
+    {
+        struct FakeClipboard : widgets::ClipboardIo {
+            std::string stored;
+            void setText(const std::string& s) override { stored = s; }
+            std::string getText() override { return stored; }
+        } clip;
+
+        auto press = [](widgets::TextFieldState& f, int keyCode, bool ctrl, bool shift,
+                        widgets::ClipboardIo* cb = nullptr) {
+            FrameInput in;
+            in.ctrlDown = ctrl;
+            in.shiftDown = shift;
+            in.onKey(KeyEvent{keyCode, true});
+            widgets::textFieldHandleInput(f, in, cb);
+        };
+        auto type = [](widgets::TextFieldState& f, const std::string& s) {
+            FrameInput in;
+            for (char c : s) in.onChar(CharEvent{(uint32_t)(unsigned char)c});
+            widgets::textFieldHandleInput(f, in);
+        };
+
+        // Ctrl+A selects all.
+        widgets::TextFieldState f;
+        type(f, "hello world");
+        press(f, key::A, /*ctrl=*/true, /*shift=*/false);
+        check(f.selectionAnchor == 0 && f.cursorByte == f.text.size(),
+             "Ctrl+A selects the whole field");
+
+        // Ctrl+C copies the selection; Ctrl+V pastes over it.
+        press(f, key::C, true, false, &clip);
+        check(clip.stored == "hello world", "Ctrl+C copies the current selection");
+        f.selectionAnchor = 0; f.cursorByte = 5;   // select "hello"
+        press(f, key::V, true, false, &clip);
+        check(f.text == "hello world world", "Ctrl+V replaces the selection with clipboard text");
+
+        // Ctrl+Left/Right jump by word; Ctrl+Shift+Left extends by word.
+        widgets::TextFieldState g;
+        type(g, "foo bar baz");
+        g.cursorByte = g.text.size();
+        g.selectionAnchor = g.cursorByte;
+        press(g, key::Left, /*ctrl=*/true, /*shift=*/false);
+        check(g.cursorByte == 8, "Ctrl+Left jumps to the start of the previous word");
+        check(g.selectionAnchor == g.cursorByte, "a plain Ctrl+Left collapses any selection");
+        press(g, key::Left, /*ctrl=*/true, /*shift=*/true);
+        check(g.cursorByte == 4 && g.selectionAnchor == 8,
+             "Ctrl+Shift+Left extends the selection by one more word");
+
+        // textFieldHandleClick (single/double-click positioning + word
+        // select) needs a live Canvas/font to measure text, so it isn't
+        // exercised headlessly here — covered by manual QA instead.
+    }
+
+    // ── "Already downloaded" highlight: library::downloaded_track_ids /
+    // downloaded_album_ids drive SearchController::refresh_downloaded's
+    // no-re-buy guard. Exercised here against a throwaway library.db rather
+    // than through SearchController itself, since populating results_
+    // requires a live search() call.
+    {
+        std::string root = (std::filesystem::temp_directory_path() /
+                            "streamer_gui_selftest_library").string();
+        std::filesystem::remove_all(root);
+
+        auto make_track = [](int id, const std::string& title) {
+            auto t = std::make_shared<kb::Track>();
+            t->id = id;
+            t->title = title;
+            return t;
+        };
+
+        // ALBUM1: both of its 2 tracks get downloaded at format 6 (flac).
+        kb::Album album1;
+        album1.id = "ALBUM1";
+        album1.title = "Fully Downloaded";
+        album1.tracks_count = 2;
+        album1.tracks = kb::ItemSearchResult<std::shared_ptr<kb::Track>>{};
+        album1.tracks->items = {make_track(101, "Track A"), make_track(102, "Track B")};
+        library::record_download(root, album1, {"101.6.flac", "102.6.flac"}, "flac", 6, "US");
+
+        // ALBUM2: only 1 of its 2 tracks gets downloaded — must not count as
+        // a fully-downloaded album.
+        kb::Album album2;
+        album2.id = "ALBUM2";
+        album2.title = "Partially Downloaded";
+        album2.tracks_count = 2;
+        album2.tracks = kb::ItemSearchResult<std::shared_ptr<kb::Track>>{};
+        album2.tracks->items = {make_track(201, "Track C"), make_track(202, "Track D")};
+        library::record_download(root, album2, {"201.6.flac"}, "flac", 6, "US");
+
+        auto tracks_flac = library::downloaded_track_ids(root, {"101", "102", "201", "999"}, 6);
+        check(tracks_flac == std::set<std::string>({"101", "102", "201"}),
+             "downloaded_track_ids finds every downloaded id in the requested format, ignores unknown ids");
+
+        auto tracks_ultra = library::downloaded_track_ids(root, {"101"}, 27);
+        check(tracks_ultra.empty(),
+             "downloaded_track_ids does not match a different format/quality than what's on disk");
+
+        auto albums_flac = library::downloaded_album_ids(root, {"ALBUM1", "ALBUM2"}, 6);
+        check(albums_flac == std::set<std::string>({"ALBUM1"}),
+             "downloaded_album_ids only counts an album once every one of its tracks is downloaded");
+
+        std::filesystem::remove_all(root);
+    }
+
     if (g_fail_count == 0) {
         std::printf("selftest: ok (%d assertions)\n", g_check_count);
         return 0;
@@ -329,6 +437,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Bridges textFieldHandleInput's platform-agnostic widgets::ClipboardIo
+    // seam to this host's native clipboard, so core/ never links against
+    // Wayland/Win32 directly.
+    struct HostClipboardIo : widgets::ClipboardIo {
+        gui::AppHost* host;
+        explicit HostClipboardIo(gui::AppHost* h) : host(h) {}
+        void setText(const std::string& utf8) override { host->set_clipboard_text(utf8); }
+        std::string getText() override { return host->get_clipboard_text(); }
+    } clipboardIo(host.get());
+
     config::Config cfg = config::load();
     if (cfg.accounts.empty()) cfg.accounts.push_back({});
     const config::Account& account = cfg.accounts.front();
@@ -351,6 +469,15 @@ int main(int argc, char** argv) {
     int accountListHover = -1;
     gui::TableInteraction tableInteraction;
 
+    // Re-checks the current results against library.db for the active
+    // quality setting — called after every search and after a quality
+    // change, so already-owned rows never look selectable (see
+    // SearchController::refresh_downloaded).
+    auto refreshDownloaded = [&] {
+        searchCtl.refresh_downloaded(settingsCtl.config().settings.download_dir.string(),
+                                     settingsCtl.config().settings.quality);
+    };
+
     enum class Screen { Search, Settings };
     Screen activeScreen = start_settings ? Screen::Settings : Screen::Search;
     constexpr int kActNavSearch = 9000, kActNavSettings = 9001;
@@ -368,6 +495,7 @@ int main(int argc, char** argv) {
         widgets::textFieldHandleInput(queryField, synth);
         searchCtl.toggle_cheatsheet();
         searchCtl.search(queryField.text, "smart");
+        refreshDownloaded();
     }
 
     FrameInput input;
@@ -430,6 +558,7 @@ int main(int argc, char** argv) {
                     searchCtl.toggle_cheatsheet();
                 } else if (hit.action == gui::ActSubmitSearch) {
                     searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
+                    refreshDownloaded();
                     tableScrollPx = 0.0f;
                 } else if (hit.action >= gui::ActTypePickerBase && hit.action < gui::ActTableHeaderBase) {
                     typePickerIndex = hit.action - gui::ActTypePickerBase;
@@ -466,6 +595,7 @@ int main(int argc, char** argv) {
                     });
                 } else if (hit.action >= gui::ActQualityBase && hit.action < gui::ActLanguageBase) {
                     settingsCtl.mutable_settings().quality = gui::kQualityValues[hit.action - gui::ActQualityBase];
+                    refreshDownloaded();
                 } else if (hit.action >= gui::ActLanguageBase && hit.action < gui::ActConcurrencyMinus) {
                     settingsCtl.mutable_settings().language = gui::kLanguageValues[hit.action - gui::ActLanguageBase];
                 } else if (hit.action == gui::ActConcurrencyMinus) {
@@ -492,9 +622,10 @@ int main(int argc, char** argv) {
             // Enter submits the search regardless of pointer position.
             if (input.keyWentDown(key::Enter)) {
                 searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
+                refreshDownloaded();
                 tableScrollPx = 0.0f;
             }
-            widgets::textFieldHandleInput(queryField, input);
+            widgets::textFieldHandleInput(queryField, input, &clipboardIo);
             if (input.wheelDelta != 0.0f) {
                 Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
                 // wheelDelta is positive for a physical "scroll up" (toward
@@ -525,7 +656,7 @@ int main(int argc, char** argv) {
                     settingsFields[fi].cursorByte = settingsFields[fi].text.size();
                 loadedAccountIdx = settingsCtl.current_account_index();
             }
-            if (focusedField >= 0) widgets::textFieldHandleInput(settingsFields[focusedField], input);
+            if (focusedField >= 0) widgets::textFieldHandleInput(settingsFields[focusedField], input, &clipboardIo);
             // Keep the account struct in sync with the edit fields every
             // frame (not just on Save) so Login with Token always sees the
             // latest typed app_id/app_secret/user_id/auth_token.
@@ -545,6 +676,30 @@ int main(int argc, char** argv) {
         canvas.useShapes(&shapeVerts);
         if (g_msdf_ok) canvas.useMsdf(&g_msdf, &msdfQuads);
         canvas.clear(theme::kBackground);
+
+        // ── Text-field click-to-position (Canvas needed to measure text, so
+        // this can't happen in the hit-dispatch loop above) — reuses LAST
+        // frame's `hits` (not cleared until below) to find the clicked
+        // field's rect, same convention as the dispatch loop.
+        if (input.pointerWentDown) {
+            int wantAction = -1;
+            widgets::TextFieldState* field = nullptr;
+            if (activeScreen == Screen::Search) {
+                wantAction = gui::ActQueryFieldClick;
+                field = &queryField;
+            } else if (focusedField >= 0) {
+                wantAction = gui::ActFieldFocusBase + focusedField;
+                field = &settingsFields[focusedField];
+            }
+            if (wantAction >= 0) {
+                for (auto& hit : hits) {
+                    if (hit.action != wantAction) continue;
+                    double nowSeconds = std::chrono::duration<double>(now.time_since_epoch()).count();
+                    widgets::textFieldHandleClick(*field, canvas, hit.rect, input, nowSeconds);
+                    break;
+                }
+            }
+        }
 
         if (widget_preview) {
             static int sortCol = 1;

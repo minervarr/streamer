@@ -36,7 +36,7 @@ constexpr float kMinColumnPx   = 48.0f;
 std::string cellForResult(const search::SearchController& ctl, int row, int col) {
     const auto& r = ctl.results()[(size_t)row];
     switch (col) {
-        case 0:  return ctl.is_selected(row) ? "[x]" : "[ ]";
+        case 0:  return ctl.is_downloaded(row) ? "\xE2\x9C\x93 Tuyo" : (ctl.is_selected(row) ? "[x]" : "[ ]");
         case 1:  return r.title;
         case 2:  return r.artist;
         case 3:  return r.label;
@@ -123,6 +123,7 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
     widgets::drawTextField(c, fieldRect, queryField, queryFocused,
                            "Search... (try: artist:\"name\" year:2020-2024)",
                            theme::kTextField);
+    hits.push_back({fieldRect, ActQueryFieldClick});
     theme::button(c, cheatRect.x, cheatRect.y, cheatRect.w, cheatRect.h, "?",
                  ctl.cheatsheet_open() ? theme::ButtonKind::Primary : theme::ButtonKind::Secondary,
                  btnState(hoveredAction, pointer.down, ActToggleCheatsheet), fieldH * 0.2f);
@@ -294,8 +295,18 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
             }
         }
     }
-    for (auto& vr : visibleRows)
-        hits.push_back({vr.rect, ActTableRowBase + vr.index});
+    // Rows already on disk (see SearchController::refresh_downloaded) get a
+    // dim overlay, same tone as disabled buttons (theme.hh), and are left out
+    // of `hits` so a click can't select them — this is the primary guard;
+    // toggle_selected() also refuses them as defense in depth.
+    for (auto& vr : visibleRows) {
+        if (ctl.is_downloaded(vr.index)) {
+            c.rect(vr.rect.x, vr.rect.y, vr.rect.w, vr.rect.h,
+                  Color{theme::kDim.r, theme::kDim.g, theme::kDim.b, 0.35f});
+        } else {
+            hits.push_back({vr.rect, ActTableRowBase + vr.index});
+        }
+    }
 
     // ── Hover-reveal ("ghost") popup for a truncated cell ───────────────────
     {

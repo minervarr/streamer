@@ -89,6 +89,15 @@ public:
     const std::set<std::string>& selected() const { return selected_ids_; }
     void clear_selection();
 
+    // Re-checks results_ against the library catalog at `download_dir` for
+    // files downloaded in exactly `quality` ("mp3"|"flac"|"flac-hi"|
+    // "flac-ultra") — a different quality of the same track/album does not
+    // count as downloaded. Call after search() and whenever the active
+    // quality setting changes. Batched (one query for tracks, one for
+    // albums), safe to call once per results page rather than per row.
+    void refresh_downloaded(const std::string& download_dir, const std::string& quality);
+    bool is_downloaded(int index) const;
+
     void toggle_cheatsheet() { cheatsheet_open_ = !cheatsheet_open_; ++revision_; }
     bool cheatsheet_open() const { return cheatsheet_open_; }
 
@@ -103,6 +112,7 @@ private:
     std::string last_error_;
     std::vector<SortKey> sort_keys_;
     std::set<std::string> selected_ids_;
+    std::set<std::string> downloaded_ids_;
     bool cheatsheet_open_ = false;
     uint64_t revision_ = 0;
 };

@@ -51,6 +51,13 @@ public:
     // depending on the host; callers should not assume ordering relative to
     // the current frame.
     virtual void pick_directory(std::function<void(const std::string&)> cb) = 0;
+
+    // System clipboard (text only). get_clipboard_text() is synchronous and
+    // may block briefly (paste is a short, user-triggered round trip on
+    // Wayland) — returns "" if the clipboard is empty, holds non-text
+    // content, or the host doesn't support it yet.
+    virtual void set_clipboard_text(const std::string& utf8) = 0;
+    virtual std::string get_clipboard_text() = 0;
 };
 
 std::unique_ptr<AppHost> make_host();   // defined by the platform skin in os/

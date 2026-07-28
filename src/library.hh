@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -82,6 +83,20 @@ std::optional<Resolution> resolve(const std::string &root, const std::string &ke
 
 std::vector<AlbumEntry> list_albums(const std::string &root, uint32_t limit);
 std::vector<Entry>      list_tracks(const std::string &root, uint32_t limit);
+
+// Which of `track_ids` already have a file on disk at exactly `format_id`.
+// One batched query, cheap enough to call once per search result page —
+// unlike resolve(), which rebuilds a whole Resolution per id.
+std::set<std::string> downloaded_track_ids(const std::string &root,
+                                           const std::vector<std::string> &track_ids,
+                                           int format_id);
+
+// Which of `album_ids` have every one of their tracks downloaded at exactly
+// `format_id` (compares the count of tracks downloaded in that quality
+// against albums.tracks_count).
+std::set<std::string> downloaded_album_ids(const std::string &root,
+                                           const std::vector<std::string> &album_ids,
+                                           int format_id);
 
 // True when the tree holds album directories but the catalog knows nothing —
 // i.e. .streamer/library.db was lost. Distinguishes "empty library" from

@@ -52,6 +52,11 @@ enum Action : int {
     ActToggleCheatsheet = 1,
     ActSubmitSearch,
     ActDownloadSelected,
+    // The search box is always focused (no click-to-focus gate like the
+    // settings fields), so this hit exists purely so gui_main.cc can look up
+    // its Rect next frame for textFieldHandleClick — it is not dispatched as
+    // a focus change.
+    ActQueryFieldClick,
     ActTypePickerBase = 100,      // + index (0..5: Smart/Albums/Tracks/Artists/Playlists/All)
     ActTableHeaderBase = 200,     // + column index
     ActTableRowBase    = 300,     // + row index (toggles selection)

@@ -891,4 +891,50 @@ std::vector<Entry> list_tracks(const std::string &root, uint32_t limit) {
     return out;
 }
 
+namespace {
+std::string in_placeholders(size_t n) {
+    std::string out;
+    for (size_t i = 0; i < n; i++) out += (i ? ",?" : "?");
+    return out;
+}
+} // namespace
+
+std::set<std::string> downloaded_track_ids(const std::string &root,
+                                           const std::vector<std::string> &track_ids,
+                                           int format_id) {
+    std::set<std::string> out;
+    if (track_ids.empty()) return out;
+    guarded("downloaded track ids", [&] {
+        Db db(db_path(root));
+        std::string sql = "SELECT DISTINCT track_id FROM files WHERE format_id=? AND track_id IN (" +
+                          in_placeholders(track_ids.size()) + ")";
+        Stmt s(db.db, sql.c_str());
+        s.bind(format_id);
+        for (auto &id : track_ids) s.bind(id);
+        while (s.step()) out.insert(std::to_string(sqlite3_column_int64(s.st, 0)));
+    });
+    return out;
+}
+
+std::set<std::string> downloaded_album_ids(const std::string &root,
+                                           const std::vector<std::string> &album_ids,
+                                           int format_id) {
+    std::set<std::string> out;
+    if (album_ids.empty()) return out;
+    guarded("downloaded album ids", [&] {
+        Db db(db_path(root));
+        std::string sql =
+            "SELECT t.album_id FROM files f JOIN tracks t ON t.id = f.track_id "
+            "WHERE f.format_id=? AND t.album_id IN (" + in_placeholders(album_ids.size()) + ") "
+            "GROUP BY t.album_id "
+            "HAVING COUNT(DISTINCT f.track_id) = "
+            "(SELECT tracks_count FROM albums WHERE id = t.album_id)";
+        Stmt s(db.db, sql.c_str());
+        s.bind(format_id);
+        for (auto &id : album_ids) s.bind(id);
+        while (s.step()) out.insert(col_text(s.st, 0));
+    });
+    return out;
+}
+
 } // namespace library

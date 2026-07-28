@@ -91,6 +91,16 @@ public:
         cb("");
     }
 
+    void set_clipboard_text(const std::string& utf8) override
+    {
+        display_->set_clipboard_text(utf8);
+    }
+
+    std::string get_clipboard_text() override
+    {
+        return display_->get_clipboard_text();
+    }
+
 private:
     FileAssetReader assets_;
     std::unique_ptr<WaylandDisplay>         display_;
