@@ -33,7 +33,8 @@
 #     2) Native              -- tuned to this exact CPU (-march=native)
 #     3) Custom              -- any -march value (v2/v3/v4/znver4/...)
 #     4) All                 -- build universal/v3/v4/zen4 in one pass
-#   Scene 2 — build type:
+#     5) Packages            -- the same four as Arch packages, for upload
+#   Scene 2 — build type (skipped for Packages, which is Release by definition):
 #     1) Release (default)
 #     2) Debug
 #
@@ -83,7 +84,8 @@ if [[ "$MODE_SET" -eq 0 && -t 0 ]]; then
     echo "  2) Native -- tuned to this exact CPU (-march=native)"
     echo "  3) Custom -- enter a specific -march value (v2/v3/v4/znver4/...)"
     echo "  4) All -- build universal/v3/v4/zen4 in one pass"
-    read -r -p "Enter choice [1-4, default 1]: " arch_choice
+    echo "  5) Packages -- the same four as Arch packages, for upload"
+    read -r -p "Enter choice [1-5, default 1]: " arch_choice
     case "$arch_choice" in
         ""|1) ;;
         2) ARCH_LEVEL="native"; ARCH_SUFFIX="_native" ;;
@@ -97,18 +99,25 @@ if [[ "$MODE_SET" -eq 0 && -t 0 ]]; then
             ARCH_SUFFIX="_custom-${custom_level}"
             ;;
         4) SHARE=1 ;;
+        5) PACKAGES=1 ;;
         *) echo "error: invalid choice '$arch_choice'" >&2; exit 2 ;;
     esac
 
-    echo "Select build type:"
-    echo "  1) Release (default)"
-    echo "  2) Debug"
-    read -r -p "Enter choice [1-2, default 1]: " type_choice
-    case "$type_choice" in
-        ""|1) BUILD_TYPE=Release ;;
-        2)    BUILD_TYPE=Debug ;;
-        *)    echo "error: invalid choice '$type_choice'" >&2; exit 2 ;;
-    esac
+    # Packages are Release by definition — the PKGBUILD hardcodes it, and a
+    # Debug package (symbols, no LTO, no --gc-sections) is not something you
+    # hand anyone. Skip the question rather than ask one whose answer is
+    # ignored.
+    if [[ "$PACKAGES" -eq 0 ]]; then
+        echo "Select build type:"
+        echo "  1) Release (default)"
+        echo "  2) Debug"
+        read -r -p "Enter choice [1-2, default 1]: " type_choice
+        case "$type_choice" in
+            ""|1) BUILD_TYPE=Release ;;
+            2)    BUILD_TYPE=Debug ;;
+            *)    echo "error: invalid choice '$type_choice'" >&2; exit 2 ;;
+        esac
+    fi
 fi
 
 # slangc autodetect: env override > VULKAN_SDK > PATH. The root CMakeLists.txt
