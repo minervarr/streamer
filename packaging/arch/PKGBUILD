@@ -1,0 +1,220 @@
+# Maintainer: nava <nava@noreply.com>
+#
+# Streamer — Arch packages, four microarchitecture variants.
+#
+# ONE makepkg run produces FOUR packages. Each is SELF-CONTAINED: a person
+# downloads exactly one file, runs `pacman -U`, and it works.
+#
+#   makepkg              # all four, builds CLI+GUI four times over
+#   makepkg --pkg streamer-v3    # just one
+#
+# Builds the latest pushed main (a `git+https://` VCS source, resolved in
+# prepare() below) — commit and push first.
+#
+# Which variant is which:
+#   universal  portable generic x86-64 — works on ANY x86-64 CPU
+#   v3         AVX2/BMI2      (Intel Haswell 2013+, AMD Excavator/Zen 2015+)
+#   v4         AVX-512        (Intel Skylake-X/Ice Lake+, AMD Zen 4+)
+#   zen4       -march=znver4  (AMD Zen 4 specifically)
+#
+# A downloader finds their level with:
+#   /lib/ld-linux-x86-64.so.2 --help | grep -A4 'Subdirectories of glibc-hwcaps'
+#
+# NOTE: -march=native is deliberately NOT offered — it bakes in whatever the
+# BUILD machine supports and SIGILLs on anything older.
+
+pkgbase=streamer
+pkgname=('streamer-universal'
+         'streamer-v3'
+         'streamer-v4'
+         'streamer-zen4')
+pkgver=r66.g74dcb76
+pkgrel=1
+arch=('x86_64')
+url='https://github.com/minervarr/streamer'
+license=('AGPL3')
+
+# TagLib, SQLite3 (amalgamation), CLI11, tomlplusplus and KawusapiCC are all
+# statically linked into the binaries, as is libcurl itself (vendored,
+# CURL_STATICLIB=ON in the root CMakeLists.txt) — but curl's TLS backend
+# links the system's OpenSSL dynamically, so that one is a real runtime dep.
+# vulkan-icd-loader/wayland/libxkbcommon are needed by the GUI at runtime.
+depends=('curl' 'openssl' 'vulkan-icd-loader' 'wayland' 'libxkbcommon' 'gcc-libs')
+
+# shader-slang-bin: slangc is REQUIRED at build time for the GUI — no .spv is
+#   committed, and VceShaders.cmake falls back to a hardcoded path without it.
+# wayland-protocols: wayland-scanner generates the xdg-shell glue from the
+#   system protocol XML at build time.
+# vulkan-headers: Vulkan API headers for the GUI's Vk_Canvas_Lb_LAW backend.
+makedepends=('git' 'cmake' 'ninja' 'shader-slang-bin' 'vulkan-headers'
+             'wayland-protocols')
+
+options=('!lto')
+
+source=("streamer::git+https://github.com/minervarr/streamer.git#branch=main"
+        'streamer.desktop'
+        'streamer.svg')
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP')
+
+PKGEXT='.pkg.tar.zst'
+
+# variant -> STREAMER_ARCH_LEVEL ("" = the compiler's portable baseline).
+# Same set scripts/linux/build.sh --share produces as tarballs, so the two
+# distribution paths stay in step.
+_arch_level() {
+    case "$1" in
+        universal) printf '' ;;
+        v3)        printf 'v3' ;;
+        v4)        printf 'v4' ;;
+        zen4)      printf 'znver4' ;;
+        *)         echo "unknown variant: $1" >&2; return 1 ;;
+    esac
+}
+
+_slangc() { command -v slangc || echo /opt/shader-slang-bin/bin/slangc; }
+
+pkgver() {
+    cd "${srcdir}/streamer"
+    # No git tags/version manifest exist; just count+hash off main.
+    printf "r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "${srcdir}/streamer"
+
+    # 4 submodules (third_party/curl, third_party/taglib,
+    # first_party/KawusapiCC, framework/Vk_Canvas_Lb_LAW). This touches the
+    # network, a deliberate deviation from Arch policy — the same one
+    # Matrix_Player's PKGBUILD documents and accepts for the same reason.
+    git submodule update --init --recursive
+}
+
+build() {
+    local _v _level _arch_arg
+    for _v in universal v3 v4 zen4; do
+        _level="$(_arch_level "$_v")"
+        _arch_arg=()
+        [[ -n "$_level" ]] && _arch_arg=(-DSTREAMER_ARCH_LEVEL="$_level")
+
+        echo "==> Building variant '${_v}'${_level:+ (-march=${_level})}"
+
+        # STREAMER_GUI=ON forces the GUI on regardless of slangc autodetect
+        # quirks; VCE_SLANGC pins the exact compiler makedepends installed.
+        #
+        # NOTE: unlike Matrix_Player, this step ALSO touches the network —
+        # CMake's FetchContent (CLI11, tomlplusplus, the sqlite3 amalgamation)
+        # runs during configure, not just in prepare(). Documented here rather
+        # than worked around: pre-populating a FetchContent cache would need
+        # its own tracked infrastructure this project doesn't have yet.
+        cmake -S streamer -B "build-${_v}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSTREAMER_GUI=ON \
+            -DVCE_SLANGC="$(_slangc)" \
+            "${_arch_arg[@]}"
+        cmake --build "build-${_v}"
+    done
+}
+
+check() {
+    # No DSP-style bit-exactness oracle exists in this project, so this is a
+    # much lighter smoke test than Matrix_Player's: just confirm the CLI binary
+    # runs (i.e. didn't SIGILL) for each variant.
+    #
+    # A variant the BUILD machine cannot execute dies with SIGILL. That is
+    # reported as SKIPPED, never folded into "passed" — an untested variant
+    # must not look like a verified one.
+    local _v _level _rc _skipped=()
+    for _v in universal v3 v4 zen4; do
+        _level="$(_arch_level "$_v")"
+        echo "==> smoke test [${_v}]"
+        _rc=0
+        "./build-${_v}/streamer" --help >/dev/null || _rc=$?
+        if (( _rc == 132 )); then          # 128 + SIGILL
+            echo "    SKIPPED — this CPU cannot execute ${_level:-baseline} code"
+            _skipped+=("$_v")
+        elif (( _rc != 0 )); then
+            echo "    FAILED (exit ${_rc}) for '${_v}'" >&2
+            return 1
+        fi
+    done
+    (( ${#_skipped[@]} )) && \
+        echo "==> NOTE: unverified on this machine: ${_skipped[*]} — test on target hardware"
+    return 0
+}
+
+# Everything a variant installs. Identical for all four apart from which
+# build-<variant>/ the binaries come from.
+_package_variant() {
+    local _v="$1"
+    cd "${srcdir}"
+
+    install -dm755 "${pkgdir}/opt/streamer"
+    install -Dm755 "build-${_v}/streamer" "${pkgdir}/opt/streamer/streamer"
+
+    if [[ -x "build-${_v}/gui/streamer_gui" ]]; then
+        install -Dm755 "build-${_v}/gui/streamer_gui" \
+            "${pkgdir}/opt/streamer/gui/streamer_gui"
+        cp -r "build-${_v}/gui/assets" "${pkgdir}/opt/streamer/gui/assets"
+        find "${pkgdir}/opt/streamer/gui/assets" -type f -exec chmod 644 {} +
+    fi
+
+    # Symlinks, not wrapper scripts: readlink("/proc/self/exe") still resolves
+    # to /opt/streamer/... this way.
+    install -dm755 "${pkgdir}/usr/bin"
+    ln -s /opt/streamer/streamer "${pkgdir}/usr/bin/streamer"
+    if [[ -x "${pkgdir}/opt/streamer/gui/streamer_gui" ]]; then
+        ln -s /opt/streamer/gui/streamer_gui "${pkgdir}/usr/bin/streamer-gui"
+    fi
+
+    install -Dm644 streamer.desktop \
+        "${pkgdir}/usr/share/applications/streamer.desktop"
+    install -Dm644 streamer.svg \
+        "${pkgdir}/usr/share/icons/hicolor/scalable/apps/streamer.svg"
+
+    # Vendored/static deps' licenses ship with the binary they're linked into.
+    # Paths tolerate a submodule reorganising its own license file.
+    local _lic="${pkgdir}/usr/share/licenses/streamer-${_v}" f _src _name
+    install -dm755 "${_lic}"
+    install -Dm644 streamer/LICENSE "${_lic}/LICENSE"
+    for f in \
+        "third_party/curl/COPYING:curl" \
+        "third_party/taglib/COPYING.LGPL:taglib" \
+        "framework/Vk_Canvas_Lb_LAW/LICENSE:Vk_Canvas_Lb_LAW"
+    do
+        _src="streamer/${f%%:*}"; _name="${f##*:}"
+        [[ -f "${_src}" ]] && install -Dm644 "${_src}" "${_lic}/LICENSE.${_name}"
+    done
+}
+
+# All four provide and conflict with 'streamer', so pacman refuses to hold two
+# variants at once and swapping one for another is a single -U.
+
+package_streamer-universal() {
+    pkgdesc="Qobuz search/download/library CLI + GUI (portable x86-64 build)"
+    provides=('streamer'); conflicts=('streamer')
+    install=streamer.install
+    _package_variant universal
+}
+
+package_streamer-v3() {
+    pkgdesc="Qobuz search/download/library CLI + GUI (x86-64-v3 / AVX2)"
+    provides=('streamer'); conflicts=('streamer')
+    install=streamer.install
+    _package_variant v3
+}
+
+package_streamer-v4() {
+    pkgdesc="Qobuz search/download/library CLI + GUI (x86-64-v4 / AVX-512)"
+    provides=('streamer'); conflicts=('streamer')
+    install=streamer.install
+    _package_variant v4
+}
+
+package_streamer-zen4() {
+    pkgdesc="Qobuz search/download/library CLI + GUI (AMD Zen 4 tuned)"
+    provides=('streamer'); conflicts=('streamer')
+    install=streamer.install
+    _package_variant zen4
+}

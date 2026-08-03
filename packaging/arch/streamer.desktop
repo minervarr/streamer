@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Streamer
+GenericName=Qobuz Downloader
+Comment=Qobuz search, download, and library manager
+Exec=streamer-gui
+Icon=streamer
+Terminal=false
+Categories=Network;AudioVideo;Audio;
+Keywords=qobuz;flac;music;download;streaming;
+StartupNotify=false

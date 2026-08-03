@@ -1,0 +1,16 @@
+post_install() {
+    cat <<'EOF'
+
+  Streamer is installed to /opt/streamer (read-only) and on your PATH as
+  `streamer` (CLI) and `streamer-gui` (Vulkan/Wayland GUI).
+
+  Before first use, edit ~/.config/streamer/config.toml and fill in
+  app_id/app_secret under [[accounts]] by hand, then run `streamer login`.
+  The file is created the first time streamer runs if it doesn't exist yet.
+
+EOF
+}
+
+post_upgrade() {
+    :
+}

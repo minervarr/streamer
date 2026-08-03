@@ -16,8 +16,11 @@
 #
 # First time: git submodule update --init --recursive
 #
-# Usage: scripts/linux/build.sh [--debug|--release|--share] [--clean]
+# Usage: scripts/linux/build.sh [--debug|--release|--share|--packages] [--clean]
 #                               [--no-gui] [cmake args...]
+# --packages: build installable Arch packages (universal/v3/v4/zen4) via
+#   packaging/arch/PKGBUILD + makepkg, dropped into dist/linux/*.pkg.tar.zst.
+#   Needs base-devel, shader-slang-bin, wayland-protocols, vulkan-headers.
 # Passing a mode flag explicitly (scripts, CI) always skips straight to the
 # build — same for non-interactive stdin (defaults to Release, Universal).
 #
@@ -51,6 +54,7 @@ cd "$(dirname "$0")/../.."
 
 BUILD_TYPE=Release
 SHARE=0
+PACKAGES=0
 CLEAN=0
 MODE_SET=0
 NO_GUI=0
@@ -60,12 +64,13 @@ CMAKE_ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        --debug)   BUILD_TYPE=Debug;   MODE_SET=1 ;;
-        --release) BUILD_TYPE=Release; MODE_SET=1 ;;
-        --share)   SHARE=1;            MODE_SET=1 ;;
-        --clean)   CLEAN=1 ;;
-        --no-gui)  NO_GUI=1 ;;
-        *)         CMAKE_ARGS+=("$arg") ;;
+        --debug)    BUILD_TYPE=Debug;   MODE_SET=1 ;;
+        --release)  BUILD_TYPE=Release; MODE_SET=1 ;;
+        --share)    SHARE=1;            MODE_SET=1 ;;
+        --packages) PACKAGES=1;         MODE_SET=1 ;;
+        --clean)    CLEAN=1 ;;
+        --no-gui)   NO_GUI=1 ;;
+        *)          CMAKE_ARGS+=("$arg") ;;
     esac
 done
 
@@ -206,6 +211,81 @@ if [[ "$SHARE" -eq 1 ]]; then
             echo "  $SHARE_ROOT/$variant/streamer"
         done
     fi
+    exit 0
+fi
+
+if [[ "$PACKAGES" -eq 1 ]]; then
+    # The Arch-package sibling of --share: same four microarch variants, but
+    # built by makepkg into installable .pkg.tar.zst files instead of tarballs.
+    #
+    # This script does NOT rebuild anything itself here. Everything — the four
+    # configures and the four self-contained packages — lives in
+    # packaging/arch/PKGBUILD, because that is where a person reading the
+    # package expects to find it, and because makepkg has to own $srcdir for
+    # its checksums to mean anything.
+    #
+    # The PKGBUILD builds the last PUSHED commit, not this working tree.
+    PKG_DIR=packaging/arch
+    DIST_DIR=dist/linux
+
+    # WHERE MAKEPKG PUTS ITS WORKING FILES — this is load-bearing, not tidiness.
+    # Left alone, all of these default to $startdir, i.e. packaging/arch/
+    # itself. For a git source that means makepkg drops a BARE CLONE OF THIS
+    # ENTIRE REPOSITORY at packaging/arch/streamer/ — exactly the kind of
+    # thing that ends up committed by accident. Absolute paths: makepkg runs
+    # with its own $startdir, so relative ones would resolve against
+    # packaging/arch/.
+    export SRCDEST="$PWD/build/packaging/src"      # VCS clones + source tarballs
+    export BUILDDIR="$PWD/build/packaging/build"   # src/ and pkg/ extraction
+    export PKGDEST="$PWD/$DIST_DIR"                # finished packages, straight to dist/
+    mkdir -p "$SRCDEST" "$BUILDDIR" "$PKGDEST"
+
+    if ! command -v makepkg >/dev/null 2>&1; then
+        echo "error: makepkg not found — this mode needs base-devel" >&2
+        exit 2
+    fi
+    if [[ ! -f "$PKG_DIR/PKGBUILD" ]]; then
+        echo "error: $PKG_DIR/PKGBUILD not found" >&2
+        exit 2
+    fi
+    if [[ "$BUILD_TYPE" == "Debug" ]]; then
+        echo "note: --packages is always Release; ignoring --debug." >&2
+    fi
+    if [[ ${#CMAKE_ARGS[@]} -gt 0 ]]; then
+        echo "note: extra cmake args are not forwarded to makepkg;" >&2
+        echo "      edit $PKG_DIR/PKGBUILD's build() instead: ${CMAKE_ARGS[*]}" >&2
+    fi
+
+    if [[ "$CLEAN" -eq 1 ]]; then
+        echo "Cleaning build/packaging and previous packages..."
+        rm -rf build/packaging
+        rm -f "$DIST_DIR"/*.pkg.tar.zst
+        mkdir -p "$SRCDEST" "$BUILDDIR"
+    fi
+
+    echo
+    echo "==> makepkg: four variants, each a full build (this takes a while)"
+    ( cd "$PKG_DIR" && makepkg -f )
+
+    shopt -s nullglob
+    built=("$DIST_DIR"/*.pkg.tar.zst)
+    shopt -u nullglob
+    if [[ ${#built[@]} -eq 0 ]]; then
+        echo "error: makepkg reported success but produced no packages" >&2
+        exit 1
+    fi
+
+    echo
+    echo "Packages in $DIST_DIR/:"
+    for p in "${built[@]}"; do
+        printf '  %6s  %s\n' "$(du -h "$p" | cut -f1)" "$p"
+    done
+    echo
+    echo "Each is self-contained — a recipient downloads ONE and runs:"
+    echo "  sudo pacman -U <file>"
+    echo "They can check which variant their CPU supports with:"
+    echo "  /lib/ld-linux-x86-64.so.2 --help | grep -A4 'Subdirectories of glibc-hwcaps'"
+    echo "universal works everywhere; v3/v4/zen4 only where that line says 'supported'."
     exit 0
 fi
 

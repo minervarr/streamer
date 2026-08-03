@@ -1,0 +1,21 @@
+# makepkg's working files. The PKGBUILD and its companions are tracked;
+# nothing makepkg produces is.
+#
+# scripts/linux/build.sh --packages exports SRCDEST/BUILDDIR/PKGDEST so none of
+# this lands here in the first place — build/ and dist/ are ignored wholesale at
+# the repo root, which is a far stronger guarantee than the patterns below.
+# These exist for the case where makepkg is run BY HAND from this directory,
+# where its defaults put everything in $startdir, i.e. right here.
+#
+# A `git+https://` source makes makepkg keep a BARE CLONE OF THE WHOLE
+# REPOSITORY at packaging/arch/streamer/ if SRCDEST isn't set — a
+# .gitignore entry is a second line of defence; the SRCDEST export is the
+# first.
+streamer/
+src/
+pkg/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+*.tar.bz2
+*.tar.gz
+*.tar.xz

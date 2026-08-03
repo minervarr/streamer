@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Linux: the build script. Interactive on a TTY (microarch target, then build
 # type); a mode flag or a non-TTY stdin goes straight to Release/Universal.
-scripts/linux/build.sh [--debug|--release|--share] [--clean] [--no-gui] [cmake args...]
+scripts/linux/build.sh [--debug|--release|--share|--packages] [--clean] [--no-gui] [cmake args...]
 ./build/linux/streamer <subcommand>          # --debug -> build/linux_debug/
 
 # Or by hand (equivalent to --release with no arch tuning)
@@ -17,7 +17,10 @@ cmake --build build
 ```
 
 `--share` builds universal/v3/v4/zen4 variants into `build/linux_share/` and packages
-each as a tarball under `dist/linux/`.
+each as a tarball under `dist/linux/`. `--packages` builds the same four variants via
+`packaging/arch/PKGBUILD` and `makepkg`, producing installable
+`dist/linux/*.pkg.tar.zst` files (`sudo pacman -U <file>`); needs `base-devel`,
+`shader-slang-bin`, `wayland-protocols`, `vulkan-headers`.
 
 Release compiles with `-O3`, LTO across every translation unit (including the vendored
 curl and TagLib — that is where the cycles go), and `--gc-sections`; `CMAKE_BUILD_TYPE`
