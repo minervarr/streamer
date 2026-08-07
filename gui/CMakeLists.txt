@@ -55,6 +55,9 @@ endforeach()
 
 add_executable(streamer_gui
     src/gui_main.cc
+    src/fonts.cc
+    src/library_controller.cc
+    src/library_view.cc
     src/query_dsl.cc
     src/search_controller.cc
     src/settings_controller.cc
@@ -82,5 +85,45 @@ add_custom_command(TARGET streamer_gui POST_BUILD
         ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Book.otf
         ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
         ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-BookItalic.otf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolHei-Regular.otf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnDotum.ttf
         ${CMAKE_CURRENT_BINARY_DIR}/assets/fonts/
 )
+
+# streamer_gui_capture — headless, native-resolution UI screenshot tool (dev
+# tooling, see gui/tools/capture/main.cc). Debug-only, precedent set by
+# Matrix_Player's matrix_ui_capture (framework/Vk_Canvas_Lb_LAW/CLAUDE.md's
+# "gate the consumer's capture target on a Debug build"). Linux-only for now
+# — needs FileAssetReader from vk_canvas_wayland, no window/compositor
+# required otherwise.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT WIN32)
+    add_executable(streamer_gui_capture
+        tools/capture/main.cc
+        src/fonts.cc
+        src/library_controller.cc
+        src/library_view.cc
+        src/query_dsl.cc
+        src/search_controller.cc
+        src/settings_controller.cc
+        src/views.cc
+    )
+    add_dependencies(streamer_gui_capture gui_shared_shaders gui_shaders)
+    target_include_directories(streamer_gui_capture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${VK_CANVAS_ROOT}/core/capture
+    )
+    target_link_libraries(streamer_gui_capture PRIVATE
+        vk_canvas_core vk_canvas_wayland streamer_core
+    )
+
+    add_custom_command(TARGET streamer_gui_capture POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_CURRENT_BINARY_DIR}/assets/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Book.otf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-BookItalic.otf
+            ${CMAKE_CURRENT_BINARY_DIR}/assets/fonts/
+    )
+endif()

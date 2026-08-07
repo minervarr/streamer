@@ -10,8 +10,11 @@
 
 #include "config.hh"
 #include "download.hh"
+#include "fonts.hh"
 #include "host.hh"
 #include "library.hh"
+#include "library_controller.hh"
+#include "library_view.hh"
 #include "query_dsl.hh"
 #include "search_controller.hh"
 #include "service_factory.hh"
@@ -19,10 +22,8 @@
 #include "views.hh"
 
 #include "canvas.hh"
-#include "font.hh"
 #include "frame_input.hh"
 #include "keys.hh"
-#include "msdf.hh"
 #include "widgets.hh"
 
 #include <api/service.hh>
@@ -310,6 +311,208 @@ int run_selftest() {
         std::filesystem::remove_all(root);
     }
 
+    // ── library::delete_album + LibraryController ───────────────────────────
+    // The one destructive path in the app, so it is exercised against real
+    // files in a temp tree rather than trusted to review. Uses the real
+    // ID-addressed layout (<root>/<country>/<album_id>/<track>.<fmt>.<ext>)
+    // because delete_album's directory cleanup depends on it.
+    {
+        namespace fs = std::filesystem;
+        const std::string root =
+            (fs::temp_directory_path() / "streamer_gui_selftest_delete").string();
+        fs::remove_all(root);
+
+        const fs::path albumDir = fs::path(root) / "US" / "ALBUM1";
+        fs::create_directories(albumDir);
+        auto write_file = [](const fs::path& p, size_t bytes) {
+            std::FILE* f = std::fopen(p.string().c_str(), "wb");
+            std::vector<char> data(bytes, 'x');
+            if (f) { std::fwrite(data.data(), 1, data.size(), f); std::fclose(f); }
+            return p.string();
+        };
+        const std::string trackA = write_file(albumDir / "101.6.flac", 1000);
+        const std::string trackB = write_file(albumDir / "102.6.flac", 2000);
+        const std::string cover  = write_file(albumDir / "cover.jpg", 500);
+
+        kb::Album album;
+        album.id = "ALBUM1";
+        album.title = "Deletable";
+        album.tracks_count = 2;
+        album.tracks = kb::ItemSearchResult<std::shared_ptr<kb::Track>>{};
+        {
+            auto t1 = std::make_shared<kb::Track>(); t1->id = 101; t1->title = "A";
+            auto t2 = std::make_shared<kb::Track>(); t2->id = 102; t2->title = "B";
+            album.tracks->items = {t1, t2};
+        }
+        library::record_download(root, album, {trackA, trackB}, "flac", 6, "US");
+        const std::string albumId = "ALBUM1";   // kb::Album::id is an optional
+        library::record_asset(root, "cover", &albumId, nullptr, cover);
+
+        auto listed = library::list_albums(root, 50);
+        check(listed.size() == 1 && listed[0].country == "US",
+             "list_albums reports the country tier the album's files live under");
+        check(listed.size() == 1 && !listed[0].cover_path.empty(),
+             "list_albums reports the registered cover asset's path");
+        check(listed.size() == 1 && listed[0].bytes_on_disk == 3000,
+             "list_albums sums the album's file sizes (cover art is not track bytes)");
+
+        // Dry run must report exactly what a real run would, and touch nothing.
+        auto dry = library::delete_album(root, "ALBUM1", /*dry_run=*/true);
+        check(dry.files_removed == 2 && dry.assets_removed == 1 && dry.bytes_freed == 3000,
+             "delete_album --dry-run reports the files, assets and bytes it would remove");
+        check(fs::exists(trackA) && fs::exists(cover),
+             "delete_album --dry-run leaves every file where it was");
+        check(!library::list_albums(root, 50).empty(),
+             "delete_album --dry-run leaves the catalog rows alone");
+
+        // A stray file the catalog never knew about must survive, and must
+        // keep the album directory alive with it.
+        const std::string stray = write_file(albumDir / "notes.txt", 10);
+
+        auto rep = library::delete_album(root, "ALBUM1");
+        check(rep.rows_removed && rep.failed.empty(),
+             "delete_album removes the catalog rows when every unlink succeeded");
+        check(rep.files_removed == 2 && rep.assets_removed == 1 && rep.bytes_freed == 3000,
+             "delete_album reports the files, assets and bytes it actually removed");
+        check(!fs::exists(trackA) && !fs::exists(trackB) && !fs::exists(cover),
+             "delete_album unlinks the album's tracks and its cover art");
+        check(fs::exists(stray),
+             "delete_album never touches a file the catalog did not list");
+        check(fs::exists(albumDir),
+             "delete_album leaves the album directory when something is still in it");
+        check(library::list_albums(root, 50).empty(),
+             "delete_album leaves no album rows behind");
+        check(library::resolve(root, "101") == std::nullopt,
+             "delete_album cascades to the album's tracks and files");
+
+        // Deleting again, and deleting something the catalog never had, are
+        // both no-ops rather than errors — the GUI can double-click Delete.
+        auto again = library::delete_album(root, "ALBUM1");
+        check(!again.rows_removed && again.files_removed == 0 && again.failed.empty(),
+             "delete_album on an album the catalog no longer has is a silent no-op");
+        auto unknown = library::delete_album(root, "NOPE");
+        check(!unknown.rows_removed && unknown.failed.empty(),
+             "delete_album on an unknown album id is a silent no-op");
+
+        // An album whose directory is empty of strays goes away entirely.
+        fs::remove(stray);
+        const fs::path albumDir2 = fs::path(root) / "US" / "ALBUM2";
+        fs::create_directories(albumDir2);
+        const std::string only = write_file(albumDir2 / "201.6.flac", 700);
+        kb::Album album2;
+        album2.id = "ALBUM2";
+        album2.title = "Sweepable";
+        album2.tracks_count = 1;
+        album2.tracks = kb::ItemSearchResult<std::shared_ptr<kb::Track>>{};
+        {
+            auto t = std::make_shared<kb::Track>(); t->id = 201; t->title = "C";
+            album2.tracks->items = {t};
+        }
+        library::record_download(root, album2, {only}, "flac", 6, "US");
+        library::delete_album(root, "ALBUM2");
+        check(!fs::exists(albumDir2),
+             "delete_album rmdirs the album directory once it is empty");
+
+        // A file the catalog listed but disk had already lost is not a
+        // failure: the row still has to go, it just frees nothing.
+        const fs::path albumDir3 = fs::path(root) / "US" / "ALBUM3";
+        fs::create_directories(albumDir3);
+        const std::string vanishing = write_file(albumDir3 / "301.6.flac", 900);
+        kb::Album album3;
+        album3.id = "ALBUM3";
+        album3.title = "Already Gone";
+        album3.tracks_count = 1;
+        album3.tracks = kb::ItemSearchResult<std::shared_ptr<kb::Track>>{};
+        {
+            auto t = std::make_shared<kb::Track>(); t->id = 301; t->title = "D";
+            album3.tracks->items = {t};
+        }
+        library::record_download(root, album3, {vanishing}, "flac", 6, "US");
+        fs::remove(vanishing);
+        auto ghost = library::delete_album(root, "ALBUM3");
+        check(ghost.rows_removed && ghost.failed.empty() && ghost.bytes_freed == 0 &&
+              ghost.files_removed == 0,
+             "delete_album prunes the row of a file disk already lost, freeing nothing");
+
+        fs::remove_all(root);
+    }
+
+    // ── LibraryController: selection and the delete confirmation ────────────
+    {
+        namespace fs = std::filesystem;
+        const std::string root =
+            (fs::temp_directory_path() / "streamer_gui_selftest_libctl").string();
+        fs::remove_all(root);
+
+        auto add_album = [&](const std::string& id, int trackId, size_t bytes) {
+            const fs::path dir = fs::path(root) / "US" / id;
+            fs::create_directories(dir);
+            const fs::path file = dir / (std::to_string(trackId) + ".6.flac");
+            std::FILE* f = std::fopen(file.string().c_str(), "wb");
+            std::vector<char> data(bytes, 'x');
+            if (f) { std::fwrite(data.data(), 1, data.size(), f); std::fclose(f); }
+            kb::Album a;
+            a.id = id;
+            a.title = "Album " + id;
+            a.tracks_count = 1;
+            a.tracks = kb::ItemSearchResult<std::shared_ptr<kb::Track>>{};
+            auto t = std::make_shared<kb::Track>(); t->id = trackId; t->title = "T";
+            a.tracks->items = {t};
+            library::record_download(root, a, {file.string()}, "flac", 6, "US");
+        };
+        add_album("A1", 11, 100);
+        add_album("A2", 22, 200);
+
+        libmgr::LibraryController ctl(root);
+        ctl.reload();
+        check(ctl.albums().size() == 2, "LibraryController::reload reads the catalog");
+
+        ctl.toggle_selected(0);
+        check(ctl.selection_count() == 1 && ctl.is_selected(0),
+             "toggling a row selects it");
+        ctl.toggle_selected(0);
+        check(ctl.selection_count() == 0, "toggling the same row again deselects it");
+
+        ctl.select_all();
+        check(ctl.selection_count() == 2 && ctl.selection_bytes() == 300,
+             "select_all selects every album and sums their bytes");
+        ctl.clear_selection();
+        check(ctl.selection_count() == 0, "clear_selection empties the selection");
+
+        // Delete refuses to happen without the confirmation step.
+        ctl.toggle_selected(0);
+        ctl.confirm_delete();
+        check(ctl.albums().size() == 2,
+             "confirm_delete does nothing unless a delete was requested first");
+
+        ctl.request_delete();
+        check(ctl.delete_pending(), "request_delete arms the confirmation");
+        ctl.cancel_delete();
+        check(!ctl.delete_pending() && ctl.albums().size() == 2,
+             "cancel_delete disarms it and deletes nothing");
+
+        ctl.request_delete();
+        ctl.confirm_delete();
+        check(ctl.albums().size() == 1 && ctl.selection_count() == 0,
+             "confirm_delete removes the selected album and clears the selection");
+        check(!ctl.status().empty() && !ctl.status_is_error(),
+             "a successful delete leaves a non-error status line");
+
+        ctl.clear_status();
+        check(ctl.status().empty(), "clear_status dismisses the status line");
+
+        // An empty selection must never arm the dialog — otherwise the modal
+        // could come up offering to delete nothing.
+        ctl.request_delete();
+        check(!ctl.delete_pending(), "request_delete is a no-op with an empty selection");
+
+        check(libmgr::format_bytes(0) == "0 B" && libmgr::format_bytes(1536) == "1.5 KB" &&
+              libmgr::format_bytes(1024 * 1024) == "1.0 MB",
+             "format_bytes scales to a readable unit with one decimal above bytes");
+
+        fs::remove_all(root);
+    }
+
     if (g_fail_count == 0) {
         std::printf("selftest: ok (%d assertions)\n", g_check_count);
         return 0;
@@ -349,46 +552,6 @@ std::string previewCell(int row, int col) {
         case 9: return "BR";
         default: return "";
     }
-}
-
-// ── Fonts (same pipeline as scanersito's gui_main.cc) ────────────────────────
-
-Font     g_font;
-bool     g_font_ok = false;
-MsdfFont g_msdf;
-bool     g_msdf_ok = false;
-
-constexpr const char* kFontRegular = "fonts/NewCM10-Book.otf";
-constexpr const char* kFontBold    = "fonts/NewCM10-Bold.otf";
-constexpr const char* kFontItalic  = "fonts/NewCM10-BookItalic.otf";
-
-void init_fonts(AssetReader& assets, const std::string& cache) {
-    std::vector<uint8_t> bytes;
-    if (assets.read(kFontRegular, bytes))
-        g_font_ok = g_font.loadFromMemory(bytes.data(), bytes.size());
-
-    if (g_msdf.generate(assets, kFontRegular, cache.c_str())) {
-        bool added = false;
-        if (!g_msdf.hasStyle(FontStyle::Bold)) {
-            g_msdf.ensureAtlasLoaded(cache.c_str());
-            added |= g_msdf.addStyle(assets, kFontBold, FontStyle::Bold);
-        }
-        if (!g_msdf.hasStyle(FontStyle::Italic)) {
-            g_msdf.ensureAtlasLoaded(cache.c_str());
-            added |= g_msdf.addStyle(assets, kFontItalic, FontStyle::Italic);
-        }
-        if (added) g_msdf.saveCache(cache.c_str());
-        g_msdf_ok = g_msdf.valid();
-    }
-    if (!g_msdf_ok)
-        std::fprintf(stderr, "[!] MSDF unavailable — curve/stroke text only\n");
-}
-
-void upload_msdf(Renderer& r, const std::string& cache) {
-    if (!g_msdf_ok) return;
-    g_msdf.ensureAtlasLoaded(cache.c_str());
-    r.initMsdf(g_msdf);
-    g_msdf.releaseAtlasPixels();
 }
 
 // Fire-and-forget background download: mirrors the CLI's `streamer download`
@@ -456,6 +619,15 @@ int main(int argc, char** argv) {
     init_fonts(host->assets(), msdf_cache);
     upload_msdf(host->renderer(), msdf_cache);
 
+    // NewCM10 has no CJK/Hangul glyphs; bakes any missing ones from the
+    // bundled fallback fonts into the atlas on demand and pushes the grown
+    // atlas to the GPU, so typed/pasted/downloaded non-Latin text (search
+    // queries, artist/album names) actually renders instead of going blank.
+    auto ensureGlyphsFor = [&](const std::string& utf8) {
+        if (ensure_glyphs(host->assets(), msdf_cache, utf8))
+            upload_msdf(host->renderer(), msdf_cache);
+    };
+
     search::SearchController searchCtl(account);
     widgets::TextFieldState queryField;
     int typePickerIndex = 0;
@@ -478,9 +650,43 @@ int main(int argc, char** argv) {
                                      settingsCtl.config().settings.quality);
     };
 
-    enum class Screen { Search, Settings };
+    // Downloaded/searched metadata (artist/album/track titles) can be CJK
+    // even when the query that found it wasn't — bake glyphs for the result
+    // set too, not just what the user typed.
+    auto ensureGlyphsForResults = [&] {
+        std::string combined;
+        for (const auto& r : searchCtl.results()) {
+            combined += r.title;
+            combined += r.artist;
+            combined += r.album;
+        }
+        ensureGlyphsFor(combined);
+    };
+
+    // The library manager: the catalog under the configured download dir,
+    // its cover textures, and the grid's scroll offset. Loaded lazily — the
+    // first visit to the screen pays for the query, not every startup.
+    libmgr::LibraryController libraryCtl(settingsCtl.config().settings.download_dir.string());
+    gui::CoverCache coverCache(&host->renderer());
+    float libraryScrollPx = 0.0f;
+    bool libraryLoaded = false;
+
+    enum class Screen { Search, Settings, Library };
     Screen activeScreen = start_settings ? Screen::Settings : Screen::Search;
-    constexpr int kActNavSearch = 9000, kActNavSettings = 9001;
+    constexpr int kActNavSearch = 9000, kActNavSettings = 9001, kActNavLibrary = 9002;
+
+    // Everything that invalidates the on-screen library: entering the screen,
+    // a delete, or the download directory changing under it.
+    auto reloadLibrary = [&] {
+        libraryCtl.set_root(settingsCtl.config().settings.download_dir.string());
+        libraryCtl.reload();
+        coverCache.clear();
+        libraryScrollPx = 0.0f;
+        libraryLoaded = true;
+        std::string combined;
+        for (const auto& a : libraryCtl.albums()) { combined += a.title; combined += a.artist_name; }
+        ensureGlyphsFor(combined);
+    };
 
     if (demo) {
         // Dev tooling only (visual verification, not shipped functionality):
@@ -544,7 +750,8 @@ int main(int argc, char** argv) {
                     hoverHeaderCol = hit.action - gui::ActTableHeaderBase;
                 else if (hit.action >= gui::ActTableRowBase)
                     hoverRow = hit.action - gui::ActTableRowBase;
-            } else if (hit.action >= gui::ActAccountListBase && hit.action < gui::ActQualityBase) {
+            } else if (activeScreen == Screen::Settings &&
+                       hit.action >= gui::ActAccountListBase && hit.action < gui::ActQualityBase) {
                 accountListHover = hit.action - gui::ActAccountListBase;
             }
 
@@ -552,6 +759,39 @@ int main(int argc, char** argv) {
 
             if (hit.action == kActNavSearch) { activeScreen = Screen::Search; continue; }
             if (hit.action == kActNavSettings) { activeScreen = Screen::Settings; continue; }
+            if (hit.action == kActNavLibrary) {
+                activeScreen = Screen::Library;
+                if (!libraryLoaded) reloadLibrary();
+                continue;
+            }
+
+            if (activeScreen == Screen::Library) {
+                if (hit.action >= gui::ActLibTileBase) {
+                    libraryCtl.toggle_selected(hit.action - gui::ActLibTileBase);
+                } else if (hit.action == gui::ActLibDeleteSelected) {
+                    libraryCtl.request_delete();
+                } else if (hit.action == gui::ActLibSelectAll) {
+                    libraryCtl.select_all();
+                } else if (hit.action == gui::ActLibClearSelection) {
+                    libraryCtl.clear_selection();
+                } else if (hit.action == gui::ActLibRefresh) {
+                    reloadLibrary();
+                } else if (hit.action == gui::ActLibCancelDelete) {
+                    libraryCtl.cancel_delete();
+                } else if (hit.action == gui::ActLibDismissStatus) {
+                    libraryCtl.clear_status();
+                } else if (hit.action == gui::ActLibConfirmDelete) {
+                    libraryCtl.confirm_delete();
+                    // The deleted albums' textures are now stale, and the
+                    // grid's rows have shifted under the scroll offset.
+                    coverCache.clear();
+                    libraryScrollPx = 0.0f;
+                    // Search results may have shown "Tuyo" for tracks that
+                    // just went away.
+                    refreshDownloaded();
+                }
+                continue;
+            }
 
             if (activeScreen == Screen::Search) {
                 if (hit.action == gui::ActToggleCheatsheet) {
@@ -559,6 +799,7 @@ int main(int argc, char** argv) {
                 } else if (hit.action == gui::ActSubmitSearch) {
                     searchCtl.search(queryField.text, std::string(gui::kTypePickerOptions[(size_t)typePickerIndex]));
                     refreshDownloaded();
+                    ensureGlyphsForResults();
                     tableScrollPx = 0.0f;
                 } else if (hit.action >= gui::ActTypePickerBase && hit.action < gui::ActTableHeaderBase) {
                     typePickerIndex = hit.action - gui::ActTypePickerBase;
@@ -625,7 +866,8 @@ int main(int argc, char** argv) {
                 refreshDownloaded();
                 tableScrollPx = 0.0f;
             }
-            widgets::textFieldHandleInput(queryField, input, &clipboardIo);
+            if (widgets::textFieldHandleInput(queryField, input, &clipboardIo))
+                ensureGlyphsFor(queryField.text);
             if (input.wheelDelta != 0.0f) {
                 Rect area = {w * 0.04f, h * 0.03f, w * 0.92f, h * 0.94f};
                 // wheelDelta is positive for a physical "scroll up" (toward
@@ -634,6 +876,21 @@ int main(int argc, char** argv) {
                 tableScrollPx -= input.wheelDelta * rowH;
                 float maxScroll = std::max(0.0f, (float)searchCtl.results().size() * rowH - area.h * 0.5f);
                 tableScrollPx = std::clamp(tableScrollPx, 0.0f, maxScroll);
+            }
+        } else if (activeScreen == Screen::Library) {
+            // Escape backs out of the confirm modal — a destructive dialog
+            // must be dismissible without aiming at a button.
+            if (input.keyWentDown(key::Escape)) libraryCtl.cancel_delete();
+            // Scrolling under an open modal would move the list the dialog is
+            // describing out from under it.
+            if (input.wheelDelta != 0.0f && !libraryCtl.delete_pending()) {
+                Rect area = {w * 0.04f, h * 0.02f + rowH + h * 0.02f, w * 0.92f,
+                             h * 0.94f - rowH - h * 0.02f};
+                libraryScrollPx -= input.wheelDelta * rowH;  // see the search table's note on sign
+                float contentH = gui::libraryContentHeight(
+                    area, (int)libraryCtl.albums().size(), rowH);
+                float maxScroll = std::max(0.0f, contentH - area.h * 0.5f);
+                libraryScrollPx = std::clamp(libraryScrollPx, 0.0f, maxScroll);
             }
         } else {
             // Reload the account edit fields from the controller whenever
@@ -656,7 +913,9 @@ int main(int argc, char** argv) {
                     settingsFields[fi].cursorByte = settingsFields[fi].text.size();
                 loadedAccountIdx = settingsCtl.current_account_index();
             }
-            if (focusedField >= 0) widgets::textFieldHandleInput(settingsFields[focusedField], input, &clipboardIo);
+            if (focusedField >= 0 &&
+                widgets::textFieldHandleInput(settingsFields[focusedField], input, &clipboardIo))
+                ensureGlyphsFor(settingsFields[focusedField].text);
             // Keep the account struct in sync with the edit fields every
             // frame (not just on Save) so Login with Token always sees the
             // latest typed app_id/app_secret/user_id/auth_token.
@@ -670,10 +929,18 @@ int main(int argc, char** argv) {
         std::vector<float> curves;
         std::vector<float> shapeVerts;
         std::vector<float> msdfQuads;
+        // Album art. Canvas::imageFg() is a no-op until useImagesFg() is
+        // given somewhere to put the draws — the library grid is this app's
+        // first consumer of the image layer. It uses the FOREGROUND layer
+        // because background images composite before the vector overlay, and
+        // the clear() below would paint straight over them.
+        std::vector<ImageDraw> images, imagesFg;
         Canvas canvas(curves, r.width(), r.height(), g_font_ok ? &g_font : nullptr,
                       /*insetTop=*/0, /*insetBottom=*/0,
                       /*insetLeft=*/0, /*insetRight=*/0);
         canvas.useShapes(&shapeVerts);
+        canvas.useImages(&images);
+        canvas.useImagesFg(&imagesFg);
         if (g_msdf_ok) canvas.useMsdf(&g_msdf, &msdfQuads);
         canvas.clear(theme::kBackground);
 
@@ -687,7 +954,7 @@ int main(int argc, char** argv) {
             if (activeScreen == Screen::Search) {
                 wantAction = gui::ActQueryFieldClick;
                 field = &queryField;
-            } else if (focusedField >= 0) {
+            } else if (activeScreen == Screen::Settings && focusedField >= 0) {
                 wantAction = gui::ActFieldFocusBase + focusedField;
                 field = &settingsFields[focusedField];
             }
@@ -753,13 +1020,17 @@ int main(int argc, char** argv) {
         } else {
             hits.clear();
 
-            // Nav bar (always visible, both screens).
-            Rect navRow = {w * 0.04f, h * 0.02f, w * 0.2f, rowH};
-            int navIdx = activeScreen == Screen::Search ? 0 : 1;
-            widgets::drawSegmented(canvas, navRow, {"Search", "Settings"}, navIdx, theme::kSegmented);
-            auto navRects = widgets::segmentRects(navRow, 2);
+            // Nav bar (always visible, every screen).
+            Rect navRow = {w * 0.04f, h * 0.02f, w * 0.3f, rowH};
+            int navIdx = activeScreen == Screen::Search   ? 0
+                       : activeScreen == Screen::Library  ? 1
+                                                          : 2;
+            widgets::drawSegmented(canvas, navRow, {"Search", "Library", "Settings"}, navIdx,
+                                   theme::kSegmented);
+            auto navRects = widgets::segmentRects(navRow, 3);
             hits.push_back({navRects[0], kActNavSearch});
-            hits.push_back({navRects[1], kActNavSettings});
+            hits.push_back({navRects[1], kActNavLibrary});
+            hits.push_back({navRects[2], kActNavSettings});
 
             Rect area = {w * 0.04f, navRow.y + navRow.h + h * 0.02f, w * 0.92f,
                         h * 0.94f - navRow.h - h * 0.02f};
@@ -770,13 +1041,17 @@ int main(int argc, char** argv) {
                                  typePickerIndex, tableScrollPx, rowH,
                                  hoverRow, hoverHeaderCol, hoveredAction,
                                  ptr, dtSeconds, tableInteraction, hits);
+            } else if (activeScreen == Screen::Library) {
+                coverCache.beginFrame();
+                gui::draw_library(canvas, area, libraryCtl, coverCache, libraryScrollPx, rowH,
+                                  hoveredAction, input.pointerDown, hits);
             } else {
                 gui::draw_settings(canvas, area, settingsCtl, settingsFields, focusedField,
                                    accountListHover, hoveredAction, input.pointerDown, rowH, hits);
             }
         }
 
-        r.draw(curves, /*overlay_rotation_deg=*/0, /*images=*/{}, /*foregroundImages=*/{},
+        r.draw(curves, /*overlay_rotation_deg=*/0, images, imagesFg,
               msdfQuads, shapeVerts);
 
         if (capture_path) {

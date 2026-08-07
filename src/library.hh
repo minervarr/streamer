@@ -49,6 +49,14 @@ struct AlbumEntry {
     std::string release_date;
     std::optional<int> tracks_count;
     int         files_on_disk = 0;
+
+    // Enough to find the album on disk and to show it: the country tier its
+    // directory sits under (<root>/<country>/<album_id>/), the cover asset's
+    // path relative to the root (empty when no cover was ever downloaded),
+    // and the summed size of its files.
+    std::string country;
+    std::string cover_path;
+    int64_t     bytes_on_disk = 0;
 };
 
 struct Resolution {
@@ -80,6 +88,31 @@ void record_asset(const std::string &root, const std::string &kind,
 // `key` may be an album id, a track id, or a path to a downloaded file
 // (absolute or relative to the root). Empty when nothing matches.
 std::optional<Resolution> resolve(const std::string &root, const std::string &key);
+
+// What delete_album() did, or (dry_run) would have done. Unlike the rest of
+// this header, deletion reports its failures instead of swallowing them: a
+// download lost to a catalog hiccup is a nuisance, but a file the user asked
+// to be gone that silently isn't is a lie about their disk.
+struct DeleteReport {
+    int     files_removed  = 0;   // audio files unlinked
+    int     assets_removed = 0;   // cover.jpg / booklet.pdf / album_description.txt
+    int64_t bytes_freed    = 0;
+    std::vector<std::string> failed;   // paths that would not unlink
+    bool    rows_removed   = false;    // the catalog rows are gone
+};
+
+// Removes an album from disk and from the catalog. Deleting only the rows
+// would not stick — the next scan() re-adopts any file it finds — so this
+// does both, files first.
+//
+// It never deletes a *path* recursively: it unlinks exactly the files the
+// catalog lists for this album, then removes the album directory only if it
+// came out empty. A stray file you put there survives, and a catalog that has
+// lost track of an album cannot be talked into erasing a directory it no
+// longer understands. Rows go in one transaction after the unlinks, so a
+// half-failed delete leaves the catalog matching what is actually on disk.
+DeleteReport delete_album(const std::string &root, const std::string &album_id,
+                          bool dry_run = false);
 
 std::vector<AlbumEntry> list_albums(const std::string &root, uint32_t limit);
 std::vector<Entry>      list_tracks(const std::string &root, uint32_t limit);

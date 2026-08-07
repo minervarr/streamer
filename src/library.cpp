@@ -503,13 +503,25 @@ AlbumEntry row_to_album(sqlite3_stmt *st) {
     a.release_date = col_text(st, 5);
     a.tracks_count = col_opt_int(st, 6);
     a.files_on_disk = sqlite3_column_int(st, 7);
+    a.country       = col_text(st, 8);
+    a.cover_path    = col_text(st, 9);
+    a.bytes_on_disk = sqlite3_column_int64(st, 10);
     return a;
 }
 
+// The three correlated subqueries at the end are what the GUI's cover grid
+// needs: the country tier (any file's will do — an album lives under exactly
+// one), the cover asset's path, and the album's size on disk.
 constexpr const char *kAlbumSelect =
     "SELECT al.id, al.title, al.version, ar.name, lb.name, al.release_date_original, "
     "al.tracks_count, "
     "(SELECT COUNT(*) FROM files f JOIN tracks t ON t.id=f.track_id "
+    " WHERE t.album_id=al.id), "
+    "(SELECT f.country FROM files f JOIN tracks t ON t.id=f.track_id "
+    " WHERE t.album_id=al.id AND f.country IS NOT NULL LIMIT 1), "
+    "(SELECT a.rel_path FROM assets a "
+    " WHERE a.album_id=al.id AND a.kind='cover' LIMIT 1), "
+    "(SELECT IFNULL(SUM(f.bytes),0) FROM files f JOIN tracks t ON t.id=f.track_id "
     " WHERE t.album_id=al.id) "
     "FROM albums al "
     "LEFT JOIN artists ar ON ar.id=al.artist_id "
@@ -644,6 +656,124 @@ std::vector<AlbumEntry> list_albums(const std::string &root, uint32_t limit) {
         while (s.step()) out.push_back(row_to_album(s.st));
     });
     return out;
+}
+
+DeleteReport delete_album(const std::string &root, const std::string &album_id, bool dry_run) {
+    DeleteReport report;
+    if (album_id.empty() || root.empty()) return report;
+
+    // Not guarded(): the caller asked for something to be gone and needs to
+    // be told when it isn't. A thrown catalog error becomes a failed entry
+    // rather than a warning on stderr nobody reads.
+    try {
+        Db db(db_path(root));
+
+        struct Doomed {
+            std::string rel;
+            int64_t bytes = 0;
+            bool asset = false;
+        };
+        std::vector<Doomed> doomed;
+        {
+            Stmt s(db.db, "SELECT f.rel_path, IFNULL(f.bytes,0) FROM files f "
+                          "JOIN tracks t ON t.id=f.track_id WHERE t.album_id=?");
+            s.bind(album_id);
+            while (s.step())
+                doomed.push_back({col_text(s.st, 0), sqlite3_column_int64(s.st, 1), false});
+        }
+        {
+            Stmt s(db.db, "SELECT rel_path, IFNULL(bytes,0) FROM assets WHERE album_id=?");
+            s.bind(album_id);
+            while (s.step())
+                doomed.push_back({col_text(s.st, 0), sqlite3_column_int64(s.st, 1), true});
+        }
+
+        // An album the catalog has never heard of is not an error to report,
+        // it is simply nothing to do — but don't confuse it with an album row
+        // that legitimately has no files left.
+        if (doomed.empty()) {
+            Stmt s(db.db, "SELECT 1 FROM albums WHERE id=?");
+            s.bind(album_id);
+            if (!s.step()) return report;
+        }
+
+        const fs::path rootp = fs::u8path(root);
+        std::set<fs::path> touched_dirs;
+        std::vector<std::string> unlinked;   // rel_paths whose file is now gone
+
+        for (const auto &d : doomed) {
+            const fs::path abs = rootp / fs::u8path(d.rel);
+            touched_dirs.insert(abs.parent_path());
+
+            std::error_code ec;
+            const bool present = fs::exists(abs, ec);
+            if (dry_run) {
+                if (!present) continue;
+                (d.asset ? report.assets_removed : report.files_removed)++;
+                if (!d.asset) report.bytes_freed += d.bytes;
+                continue;
+            }
+            if (present && !fs::remove(abs, ec)) {
+                report.failed.push_back(d.rel);
+                continue;
+            }
+            unlinked.push_back(d.rel);
+            // A file the catalog knew about but disk had already lost costs
+            // nothing to "free" — the row still has to go, so it counts as
+            // removed but contributes no bytes.
+            if (present) {
+                (d.asset ? report.assets_removed : report.files_removed)++;
+                if (!d.asset) report.bytes_freed += d.bytes;
+            }
+        }
+
+        // Only ever rmdir, never remove_all: a directory that still holds
+        // something the catalog didn't list stays, along with whatever it is.
+        // Walks up so an emptied country tier goes too, stopping at the root.
+        if (!dry_run) {
+            for (fs::path dir : touched_dirs) {
+                std::error_code ec;
+                while (dir != rootp && dir.has_relative_path() &&
+                       dir.filename() != ".streamer" &&
+                       fs::is_directory(dir, ec) && fs::is_empty(dir, ec) && !ec) {
+                    if (!fs::remove(dir, ec)) break;
+                    dir = dir.parent_path();
+                }
+            }
+        }
+
+        if (dry_run) {
+            report.rows_removed = report.failed.empty();
+            return report;
+        }
+
+        Transaction tx(db.db);
+        if (report.failed.empty()) {
+            // foreign_keys=ON, and tracks/files/assets/album_artists all
+            // cascade from albums, so one delete takes the whole album.
+            Stmt s(db.db, "DELETE FROM albums WHERE id=?");
+            s.bind(album_id);
+            s.run();
+            report.rows_removed = true;
+        } else {
+            // Partial delete: drop only the rows whose file actually went, so
+            // the catalog keeps matching the disk instead of claiming files
+            // that are still there.
+            for (const auto &rel : unlinked) {
+                Stmt f(db.db, "DELETE FROM files WHERE rel_path=?");
+                f.bind(rel);
+                f.run();
+                Stmt a(db.db, "DELETE FROM assets WHERE rel_path=?");
+                a.bind(rel);
+                a.run();
+            }
+        }
+    } catch (const std::exception &e) {
+        report.failed.push_back(std::string("catalog: ") + e.what());
+    } catch (...) {
+        report.failed.push_back("catalog: unknown error");
+    }
+    return report;
 }
 
 bool catalog_looks_lost(const std::string &root) {
