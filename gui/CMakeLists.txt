@@ -56,7 +56,11 @@ foreach(_cfg "" _DEBUG _RELEASE _RELWITHDEBINFO _MINSIZEREL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY${_cfg} ${CMAKE_CURRENT_BINARY_DIR})
 endforeach()
 
-add_executable(streamer_gui
+# WIN32: without it, win32_host.cc's own window still opens fine, but the
+# console subsystem also allocates a visible console window behind it (a
+# plain `int main()` needs no WinMain change on MinGW/Clang — the toolchain's
+# own CRT startup already dispatches WinMain into main()). No-op on Linux.
+add_executable(streamer_gui WIN32
     src/gui_main.cc
     src/fonts.cc
     src/library_controller.cc
