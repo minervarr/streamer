@@ -252,9 +252,9 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
     {
         auto liveCols = widgets::tableHeaderColumnRects(header, cols, &table.columnWidthsPx);
         for (size_t b = 1; b < liveCols.size(); b++) {
-            bool near = pointer.y >= header.y && pointer.y <= tableArea.y + tableArea.h &&
+            bool nearBoundary = pointer.y >= header.y && pointer.y <= tableArea.y + tableArea.h &&
                        std::abs(pointer.x - liveCols[b].x) <= kResizeStripPx * 0.5f;
-            if (near || table.resizeBoundary == (int)b - 1)
+            if (nearBoundary || table.resizeBoundary == (int)b - 1)
                 c.rect(liveCols[b].x - 1.0f, header.y, 2.0f, tableArea.h, theme::kAccent);
         }
 

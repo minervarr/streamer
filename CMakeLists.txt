@@ -230,12 +230,6 @@ if(MSVC)
         $<$<CONFIG:Release>:/arch:AVX2>)
 endif()
 
-# ── legacy GUI (Windows only; preserved as reference until the new gui/ port
-#    is complete) ─────────────────────────────────────────────────────────────
-if(WIN32)
-    add_subdirectory(streamer-gui)
-endif()
-
 # ── new cross-platform GUI (Vulkan/vk_canvas) ───────────────────────────────
 # Needs a Slang shader compiler (Vulkan SDK / shader-slang) at build time, so
 # a box without one must still configure. Override with -DSTREAMER_GUI=ON/OFF
