@@ -91,6 +91,15 @@ if(NOT MSVC)
             $<$<CONFIG:Release>:LINKER:--as-needed>
         )
     endif()
+    if(WIN32)
+        # Clang-on-MinGW (UCRT64) dynamically links libstdc++/libgcc_s_seh/
+        # libwinpthread from the toolchain's own bin/ by default; that
+        # directory isn't on a normal user's PATH, so streamer.exe /
+        # streamer_gui.exe fail to start outside an MSYS2 shell with
+        # missing-DLL errors. Link the runtime statically so the exe is
+        # self-contained.
+        add_link_options(-static-libgcc -static-libstdc++ -static)
+    endif()
 endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY         "${CMAKE_BINARY_DIR}")
@@ -128,12 +137,29 @@ set(CURL_USE_LIBPSL       OFF CACHE BOOL "" FORCE)
 set(CURL_USE_LIBSSH2      OFF CACHE BOOL "" FORCE)
 set(USE_LIBIDN2           OFF CACHE BOOL "" FORCE)
 set(CURL_ZLIB             OFF CACHE BOOL "" FORCE)
+# Left on AUTO/ON by default, these get auto-detected via pkg-config on
+# MSYS2/UCRT64 and resolve to *shared* import libraries even though curl
+# itself is built static — the resulting streamer/streamer_gui executables
+# end up dynamically linked against zlib1.dll, libnghttp2-*.dll,
+# libbrotli*.dll, libzstd.dll (none of which ship next to the .exe or sit on
+# a normal Windows PATH). Not needed: HTTP_ONLY is already on and the Qobuz
+# client doesn't rely on HTTP/2 or these content encodings.
+set(CURL_BROTLI           OFF CACHE BOOL "" FORCE)
+set(CURL_ZSTD             OFF CACHE BOOL "" FORCE)
+set(USE_NGHTTP2           OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/curl)
 
 # ── bundled taglib (third_party/taglib) ─────────────────────────────────────
 set(BUILD_SHARED_LIBS     OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES        OFF CACHE BOOL "" FORCE)
+if(WIN32)
+    # WITH_ZLIB defaults ON (used for zlib-compressed ID3v2 frames, a rarely
+    # seen tag feature) and pulls in zlib1.dll the same way curl's optional
+    # deps above did — the only MSYS2 DLL left after disabling those. Linux
+    # keeps it: libz.so.1 is a base-system library there, not a problem.
+    set(WITH_ZLIB OFF CACHE BOOL "" FORCE)
+endif()
 add_subdirectory(third_party/taglib)
 
 # taglib's source headers are in subdirectories (toolkit/, mpeg/, …) but public API
