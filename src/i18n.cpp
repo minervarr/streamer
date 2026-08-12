@@ -79,6 +79,37 @@ const char *t(const char *key) {
                          "Simulación — no se escribió nada.");
     T("lib_not_found",   "Not in the catalog:",
                          "No está en el catálogo:");
+    T("cmd_backup",
+        "Write one file that can rebuild this whole library on another machine",
+        "Escribir un solo archivo que puede reconstruir toda esta biblioteca en otra computadora");
+    T("cmd_backup_list",
+        "Print the backup's contents as a readable list of names",
+        "Mostrar el contenido del respaldo como una lista legible de nombres");
+    T("cmd_restore",
+        "Download everything a backup file describes, using an account from each album's country",
+        "Descargar todo lo que describe un archivo de respaldo, usando una cuenta del país de cada álbum");
+    T("backup_written",  "Backup written to",
+                         "Respaldo escrito en");
+    T("backup_token_warning",
+        "This file contains your auth tokens in the clear — keep it somewhere private.",
+        "Este archivo contiene tus tokens de acceso sin cifrar — guárdalo en un lugar privado.");
+    T("restore_root",    "Library root:",
+                         "Carpeta de la biblioteca:");
+    T("restore_config_written",
+        "Settings and accounts were written to the config file.",
+        "Los ajustes y las cuentas se escribieron en el archivo de configuración.");
+    T("restore_catalog_written",
+        "The catalog was restored, so every real name is already available.",
+        "El catálogo fue restaurado, así que todos los nombres reales ya están disponibles.");
+    T("restore_planned",     "to download", "por descargar");
+    T("restore_skipped",     "already there", "ya estaban");
+    T("restore_downloaded",  "downloaded",   "descargados");
+    T("restore_failed",      "failed",       "fallidos");
+    T("restore_no_account",
+        "Some albums had no account for their country and were tried with the default one",
+        "Algunos álbumes no tenían cuenta de su país y se intentaron con la cuenta por omisión");
+    T("restore_failures_at", "What could not be downloaded is listed in",
+                             "Lo que no se pudo descargar está listado en");
     T("cmd_refresh_credentials",
         "Re-scrape app_id/app_secret from the Qobuz web player and save them",
         "Volver a extraer app_id/app_secret del reproductor web de Qobuz y guardarlos");

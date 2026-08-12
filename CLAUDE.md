@@ -52,6 +52,7 @@ This is a pure C++ project. The CLI binary (`streamer`) is built by `CMakeLists.
 | `inspect.hh/.cpp` | Album track listing with availability info |
 | `extras.hh/.cpp` | Cover art, booklet PDF, artist bio download |
 | `history.hh/.cpp` | SQLite3 download history (record/list/export/import/clear) |
+| `backup.hh/.cpp` | One-file backup/restore of the whole library (create/restore/readable) |
 | `library.hh/.cpp` | SQLite3 library catalog — the real names behind the ID-addressed layout |
 | `service_factory.hh/.cpp` | `qobuz::make_service()` — the one place a `QobuzApiService` is built |
 | `url.hh/.cpp` | URL parser for Qobuz links and bare IDs |
@@ -82,6 +83,25 @@ out of band leave stale rows. `streamer library scan` reconciles: prunes rows wh
 gone, adopts unknown files (re-fetching album metadata by the ID in the path), re-registers
 assets. It is also the rebuild path — losing `library.db` costs nothing permanent, since the
 directory and file names are the Qobuz IDs. `--dry-run` and `--offline` available.
+
+### Backup / restore
+
+`streamer backup <file>` writes one SQLite file that can rebuild the library on another
+machine: a `VACUUM INTO` copy of `library.db` plus `backup_meta` / `backup_settings` /
+`backup_accounts` / `backup_history` tables and the `view_restore` / `view_readable`
+views. It never copies audio — ID-addressed paths mean a list of ids suffices, so a
+library of hundreds of GB backs up to well under a megabyte. `backup_meta.format_version`
+is its own version, separate from the catalog's `PRAGMA user_version`.
+
+`streamer restore <file>` seeds `<root>/.streamer/library.db` from that catalog (minus
+`files`/`assets`, whose rows describe the *old* machine's disk) so real names exist before
+the first byte lands, then re-downloads each album **with an account whose `country`
+matches the one the album was originally fetched under** — availability is regional.
+It is resumable: anything already catalogued at that format id is skipped, so an
+interrupted run continues rather than restarting. Failures land in `<file>.failed.tsv`.
+
+`streamer backup list <file>` dumps the names for a human — it accepts a backup file or a
+live `library.db`, and is the fallback path for anything Qobuz will no longer serve.
 
 Large files are fetched over parallel byte ranges (`ae::HttpClient::Options::max_segments`,
 4 for the CDN client) because Qobuz throttles per connection; a process-wide semaphore caps

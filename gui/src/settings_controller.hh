@@ -5,7 +5,10 @@
 
 #include "config.hh"
 
+#include <atomic>
 #include <cstdint>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -41,6 +44,26 @@ public:
     bool export_to(const std::string& path);
     bool import_from(const std::string& path);
 
+    // ── Library backup ────────────────────────────────────────────────────
+    // One file that can rebuild the whole library elsewhere (src/backup.hh).
+    // All three run on a detached thread — a backup of a large catalog and a
+    // restore that downloads for hours must never block the frame loop — and
+    // report through backup_status(), which the settings view polls each frame.
+    //
+    // No path to choose: these always work on a fixed name in the user's home
+    // folder. A file picker would put a dialog between the user and the one
+    // thing they need, and then leave them wondering where the file went —
+    // "it is in your home folder" is an answer they already know.
+    static constexpr const char* kBackupFileName   = "streamer-backup.db";
+    static constexpr const char* kReadableFileName = "streamer-library.txt";
+
+    void backup_to();
+    void restore_from();
+    void write_readable();
+
+    bool backup_busy() const { return backup_busy_.load(); }
+    std::string backup_status() const;
+
     const std::string& last_error() const { return last_error_; }
     bool dirty() const { return dirty_; }
 
@@ -52,6 +75,15 @@ private:
     bool dirty_ = false;
     std::string last_error_;
     uint64_t revision_ = 0;
+
+    std::atomic<bool> backup_busy_{false};
+    mutable std::mutex backup_mutex_;
+    std::string backup_status_;
+
+    void set_backup_status(const std::string& s);
+    // Runs `work` on a detached thread unless one is already in flight,
+    // funnelling any exception into the status line.
+    void run_backup_job(std::function<void()> work);
 
     void cfg_dirty() { dirty_ = true; ++revision_; }
 };

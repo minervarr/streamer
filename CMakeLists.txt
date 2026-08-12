@@ -219,6 +219,7 @@ target_compile_definitions(sqlite3_lib PRIVATE
 
 # ── streamer_core (backend logic shared by the CLI and the GUI) ─────────────
 add_library(streamer_core STATIC
+    src/backup.cpp
     src/config.cpp
     src/history.cpp
     src/library.cpp

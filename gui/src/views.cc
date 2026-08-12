@@ -537,8 +537,48 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
         hits.push_back({saveRect, ActSettingsSave});
         ry += rowH * 1.6f;
 
-        if (!ctl.last_error().empty())
+        if (!ctl.last_error().empty()) {
             c.text(ctl.last_error(), rightCol.x, ry, rowH * 0.32f, theme::kDanger);
+            ry += rowH * 0.9f;
+        }
+
+        // ── Library backup ──────────────────────────────────────────────────
+        // Three buttons over one status line. Every one of them works on a
+        // folder the user picks, holding a file named by the controller — the
+        // hosts have a directory picker but no file picker.
+        widgets::drawGroupHeader(c, {rightCol.x, ry, rightCol.w, rowH},
+                                 "Library Backup", theme::kText);
+        ry += rowH * 1.1f;
+
+        bool busy = ctl.backup_busy();
+        float bw = rightCol.w * 0.315f;
+        Rect bkRect  = {rightCol.x, ry, bw, rowH};
+        Rect rsRect  = {rightCol.x + rightCol.w * 0.3425f, ry, bw, rowH};
+        Rect rdRect  = {rightCol.x + rightCol.w * 0.685f, ry, bw, rowH};
+        theme::button(c, bkRect.x, bkRect.y, bkRect.w, bkRect.h, "Back Up",
+                     theme::ButtonKind::Primary,
+                     btnState(hoveredAction, pointerDown, ActBackupLibrary, busy),
+                     rowH * 0.2f);
+        theme::button(c, rsRect.x, rsRect.y, rsRect.w, rsRect.h, "Restore",
+                     theme::ButtonKind::Secondary,
+                     btnState(hoveredAction, pointerDown, ActRestoreBackup, busy),
+                     rowH * 0.2f);
+        theme::button(c, rdRect.x, rdRect.y, rdRect.w, rdRect.h, "Name List",
+                     theme::ButtonKind::Secondary,
+                     btnState(hoveredAction, pointerDown, ActReadableList, busy),
+                     rowH * 0.2f);
+        // A job in flight owns the whole section: no hits, so a second click
+        // cannot start a competing backup.
+        if (!busy) {
+            hits.push_back({bkRect, ActBackupLibrary});
+            hits.push_back({rsRect, ActRestoreBackup});
+            hits.push_back({rdRect, ActReadableList});
+        }
+        ry += rowH * 1.25f;
+
+        std::string status = ctl.backup_status();
+        if (!status.empty())
+            c.text(status, rightCol.x, ry, rowH * 0.3f, theme::kDim);
     }
 }
 

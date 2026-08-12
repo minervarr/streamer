@@ -830,6 +830,12 @@ int main(int argc, char** argv) {
                     settingsCtl.export_to((config::config_path().parent_path() / "accounts-export.toml").string());
                 } else if (hit.action == gui::ActImportAccounts) {
                     settingsCtl.import_from((config::config_path().parent_path() / "accounts-export.toml").string());
+                } else if (hit.action == gui::ActBackupLibrary) {
+                    settingsCtl.backup_to();
+                } else if (hit.action == gui::ActRestoreBackup) {
+                    settingsCtl.restore_from();
+                } else if (hit.action == gui::ActReadableList) {
+                    settingsCtl.write_readable();
                 } else if (hit.action == gui::ActBrowseDownloadDir) {
                     host->pick_directory([&](const std::string& path) {
                         if (!path.empty()) settingsFields[gui::FieldDownloadDir].text = path;

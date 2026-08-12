@@ -1,3 +1,4 @@
+#include "backup.hh"
 #include "config.hh"
 #include "download.hh"
 #include "history.hh"
@@ -366,7 +367,9 @@ int main(int argc, char **argv) {
                         i18n::t("records_suffix"));
         });
 
-        sub->callback([&]() {
+        // `sub` by value — see the note on the backup subcommand: by the time
+        // CLI11 runs this, the block-local pointer variable is gone.
+        sub->callback([&, sub]() {
             if (sub->got_subcommand("export") || sub->got_subcommand("import")
                     || sub->got_subcommand("clear")) return;
             if (hist_tsv) {
@@ -495,6 +498,125 @@ int main(int argc, char **argv) {
             for (const auto &t : found->tracks) {
                 std::printf("  %3d. %-45s %s\n", t.track_number.value_or(0),
                             t.track_title.c_str(), t.rel_path.c_str());
+            }
+        });
+    }
+
+    // ── backup / restore ──────────────────────────────────────────────────────
+    // One file that stands in for the whole library. It holds names and ids,
+    // never audio: downloads are ID-addressed, so re-fetching is possible from
+    // a list of ids, and a list of ids is small.
+    std::string bk_file, bk_root, bk_list_file, bk_list_out;
+    bool bk_force = false, bk_no_accounts = false, bk_list_tsv = false;
+    {
+        auto *sub = app.add_subcommand("backup", i18n::t("cmd_backup"));
+        sub->require_subcommand(0);
+        sub->add_option("file", bk_file, "Backup file to write (default: streamer-backup.db)");
+        sub->add_option("--root", bk_root,
+            "Library root (default: the configured download directory)");
+        sub->add_flag("--force", bk_force, "Replace the file if it already exists");
+        sub->add_flag("--no-accounts", bk_no_accounts,
+            "Leave accounts and auth tokens out of the file");
+
+        auto *ls = sub->add_subcommand("list", i18n::t("cmd_backup_list"));
+        ls->add_option("file", bk_list_file, "Backup file (or a library.db)")->required();
+        ls->add_flag("--tsv", bk_list_tsv, "One flat row per track, for a spreadsheet");
+        ls->add_option("-o,--output", bk_list_out, "Write to this file instead of stdout");
+        ls->callback([&]() {
+            try {
+                std::string text = backup::readable(bk_list_file, bk_list_tsv);
+                if (bk_list_out.empty()) {
+                    std::fwrite(text.data(), 1, text.size(), stdout);
+                } else {
+                    std::ofstream f(fs::u8path(bk_list_out), std::ios::binary);
+                    if (!f) {
+                        std::fprintf(stderr, "%s %s\n", i18n::t("warning_could_not_save"),
+                                     bk_list_out.c_str());
+                        std::exit(1);
+                    }
+                    f << text;
+                    std::printf("%s %s\n", i18n::t("exported_to"), bk_list_out.c_str());
+                }
+            } catch (const std::exception &e) {
+                std::fprintf(stderr, "Error: %s\n", e.what());
+                std::exit(1);
+            }
+        });
+
+        // `sub` by value: CLI11 runs this after the enclosing block has exited,
+        // so capturing the block-local pointer by reference is a dangling read.
+        sub->callback([&, sub]() {
+            if (sub->got_subcommand("list")) return;
+            backup::CreateOptions opts;
+            opts.root             = bk_root;
+            opts.overwrite        = bk_force;
+            opts.include_accounts = !bk_no_accounts;
+            std::string out = bk_file.empty() ? "streamer-backup.db" : bk_file;
+            try {
+                auto r = backup::create(out, opts);
+                std::printf("%s %s\n", i18n::t("backup_written"), out.c_str());
+                std::printf("  %d albums · %d tracks · %d files · %d assets · "
+                            "%d accounts · %d history rows · %.1f MB\n",
+                            r.albums, r.tracks, r.files, r.assets, r.accounts,
+                            r.history_rows, r.bytes / 1048576.0);
+                if (r.accounts > 0)
+                    std::printf("%s\n", i18n::t("backup_token_warning"));
+            } catch (const std::exception &e) {
+                std::fprintf(stderr, "Error: %s\n", e.what());
+                std::exit(1);
+            }
+        });
+    }
+
+    std::string rs_file, rs_dir, rs_quality;
+    int rs_concurrency = 0;
+    bool rs_dry_run = false, rs_no_config = false, rs_force_config = false;
+    {
+        auto *sub = app.add_subcommand("restore", i18n::t("cmd_restore"));
+        sub->add_option("file", rs_file, "Backup file to restore from")->required();
+        sub->add_option("--dir", rs_dir,
+            "Where to put the library (default: the directory recorded in the backup)");
+        sub->add_option("-q,--quality", rs_quality,
+            "Download everything at this quality instead of the recorded one");
+        sub->add_option("-j,--concurrency", rs_concurrency, "Concurrent downloads");
+        sub->add_flag("--dry-run", rs_dry_run, "Show what would be downloaded, download nothing");
+        sub->add_flag("--no-config", rs_no_config, "Do not touch config.toml");
+        sub->add_flag("--force-config", rs_force_config,
+            "Overwrite an existing config that already has accounts");
+
+        sub->callback([&]() {
+            backup::RestoreOptions opts;
+            opts.dir              = rs_dir;
+            opts.quality_override = rs_quality;
+            opts.concurrency      = rs_concurrency;
+            opts.apply_config     = !rs_no_config;
+            opts.force_config     = rs_force_config;
+            opts.dry_run          = rs_dry_run;
+
+            try {
+                auto r = backup::restore(rs_file, opts,
+                    [&](const std::string &line, int done, int total) {
+                        std::printf("[%d/%d] %s\n", done, total, line.c_str());
+                        std::fflush(stdout);
+                    });
+
+                std::printf("\n%s %s\n", i18n::t("restore_root"), r.root.c_str());
+                if (r.config_written)  std::printf("%s\n", i18n::t("restore_config_written"));
+                if (r.catalog_written) std::printf("%s\n", i18n::t("restore_catalog_written"));
+                std::printf("  %d %s · %d %s · %d %s · %d %s\n",
+                            r.planned,    i18n::t("restore_planned"),
+                            r.skipped,    i18n::t("restore_skipped"),
+                            r.downloaded, i18n::t("restore_downloaded"),
+                            r.failed,     i18n::t("restore_failed"));
+                if (r.no_account > 0)
+                    std::printf("%s (%d)\n", i18n::t("restore_no_account"), r.no_account);
+                if (!r.failures_path.empty())
+                    std::printf("%s %s\n", i18n::t("restore_failures_at"),
+                                r.failures_path.c_str());
+                if (r.failed > 0) std::exit(1);
+            } catch (const std::exception &e) {
+                std::fprintf(stderr, "Error: %s\n", e.what());
+                std::exit(1);
             }
         });
     }

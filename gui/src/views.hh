@@ -73,6 +73,9 @@ enum SettingsAction : int {
     ActExportAccounts,
     ActImportAccounts,
     ActBrowseDownloadDir,
+    ActBackupLibrary,          // write one file that can rebuild the library
+    ActRestoreBackup,          // re-download everything such a file describes
+    ActReadableList,           // dump that file's names as readable text
     ActAccountListBase   = 100,  // + account index
     ActQualityBase       = 200,  // + quality index (mp3/flac/flac-hi/flac-ultra)
     ActLanguageBase      = 300,  // + language index (en/es)
