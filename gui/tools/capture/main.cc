@@ -46,6 +46,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -58,6 +59,7 @@ bool captureScreen(Renderer& renderer, const std::string& screen,
                    settings::SettingsController& settingsCtl,
                    widgets::TextFieldState settingsFields[gui::FieldCount],
                    libmgr::LibraryController& libraryCtl, gui::CoverCache& covers,
+                   const std::vector<std::string_view>& countryOptions,
                    std::vector<uint8_t>& rgba, uint32_t& outW, uint32_t& outH) {
     float w = (float)renderer.width(), h = (float)renderer.height();
     float rowH = h * 0.045f;
@@ -103,7 +105,7 @@ bool captureScreen(Renderer& renderer, const std::string& screen,
                          /*typePickerIndex=*/0, /*tableScrollPx=*/0.0f, rowH,
                          /*hoverRow=*/-1, /*hoverHeaderCol=*/-1, /*hoveredAction=*/-1,
                          ptr, /*dtSeconds=*/0.0f, table,
-                         /*countryOptions=*/{}, /*countryPickerIndex=*/0, hits);
+                         countryOptions, /*countryPickerIndex=*/0, hits);
     }
 
     renderer.draw(curves, /*overlay_rotation_deg=*/0, images, imagesFg,
@@ -225,11 +227,19 @@ int main(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories(out_dir, ec);
 
+    // Mirrors gui_main.cc's picker: Auto, All, then one entry per account, so
+    // a capture shows the region control exactly as the live app draws it.
+    std::vector<std::string> countryOptions{"Auto", "All"};
+    for (const config::Account& a : cfg.accounts)
+        countryOptions.push_back(a.country.empty() ? "?" : a.country);
+    const std::vector<std::string_view> countryOptionViews(countryOptions.begin(),
+                                                           countryOptions.end());
+
     for (const auto& screen : screens) {
         std::vector<uint8_t> rgba;
         uint32_t outW = 0, outH = 0;
         if (!captureScreen(renderer, screen, searchCtl, queryField, settingsCtl, settingsFields,
-                           libraryCtl, covers, rgba, outW, outH)) {
+                           libraryCtl, covers, countryOptionViews, rgba, outW, outH)) {
             std::fprintf(stderr, "[x] readback failed for %s\n", screen.c_str());
             return 1;
         }

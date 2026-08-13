@@ -16,6 +16,34 @@ cmake --build build
 ./build/streamer <subcommand>
 ```
 
+### Seeing the GUI without a display
+
+The GUI is skipped unless `slangc` is on `PATH`. On this machine it lives outside it:
+
+```bash
+scripts/linux/build.sh --debug -DSTREAMER_GUI=ON -DVCE_SLANGC=/opt/shader-slang/bin/slangc
+```
+
+That also builds **`streamer_gui_capture`** (Debug-only, gated in `gui/CMakeLists.txt`),
+which renders the app's real screens off-screen through `VK_EXT_headless_surface` and
+writes PNGs — no compositor, no window, no display needed. It is the way to actually
+*look at* a UI change rather than infer it from the code:
+
+```bash
+build/linux_debug/gui/streamer_gui_capture --frame 1920x1080 --out shots \
+    --screen search --query 'daft punk country:NZ'
+# no --screen -> captures search.png + library.png + settings.png in one run
+```
+
+It builds against the same controllers/views as `streamer_gui` and performs real
+network calls, so a capture reflects live account state. `--library-root`,
+`--library-select` and `--library-confirm` reach the library states a one-shot
+capture otherwise cannot.
+
+`streamer_gui --selftest` is the headless logic test harness (no GPU, no network) —
+`run_selftest()` in `gui/src/gui_main.cc`. Pure functions are deliberately exposed for
+it (`CycleSortKey`, `ApplySort`, `MergeByIdAcrossCountries`, `account::classify`).
+
 `--share` builds universal/v3/v4/zen4 variants into `build/linux_share/` and packages
 each as a tarball under `dist/linux/`. `--packages` builds the same four variants via
 `packaging/arch/PKGBUILD` and `makepkg`, producing installable

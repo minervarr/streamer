@@ -9,12 +9,9 @@
 
 namespace inspect {
 
-void run_album(kb::QobuzApiService &svc, const std::string &album_id) {
+kb::Result<void> run_album(kb::QobuzApiService &svc, const std::string &album_id) {
     auto res = svc.get_album(album_id);
-    if (!res.ok()) {
-        std::fprintf(stderr, "%s %s\n", i18n::t("error_fetch"), res.error().message.c_str());
-        return;
-    }
+    if (!res.ok()) return res.error();
     const auto &album = res.value();
 
     std::string title  = album.title.value_or("?");
@@ -49,14 +46,14 @@ void run_album(kb::QobuzApiService &svc, const std::string &album_id) {
 
     if (!album.tracks) {
         std::printf("\n%s\n", i18n::t("no_tracks"));
-        return;
+        return {};
     }
 
     auto &tr_res = *album.tracks;
     auto &items  = tr_res.items;
     if (!items || items->empty()) {
         std::printf("\n%s\n", i18n::t("no_tracks"));
-        return;
+        return {};
     }
 
     std::printf("\n");
@@ -90,14 +87,12 @@ void run_album(kb::QobuzApiService &svc, const std::string &album_id) {
                 num, (ttitle + " (" + tver + ")").c_str(),
                 search::fmt_duration(dur).c_str(), avail, hires);
     }
+    return {};
 }
 
-void run_track(kb::QobuzApiService &svc, int track_id) {
+kb::Result<void> run_track(kb::QobuzApiService &svc, int track_id) {
     auto res = svc.get_track(track_id);
-    if (!res.ok()) {
-        std::fprintf(stderr, "%s %s\n", i18n::t("error_fetch"), res.error().message.c_str());
-        return;
-    }
+    if (!res.ok()) return res.error();
     const auto &t = res.value();
 
     std::string title  = t.title.value_or("?");
@@ -117,6 +112,7 @@ void run_track(kb::QobuzApiService &svc, int track_id) {
     std::printf("%s: %s\n", i18n::t("field_duration"), search::fmt_duration(dur).c_str());
     std::printf("%s: %s\n", i18n::t("field_hires"),    hi_t  ? i18n::t("yes") : i18n::t("no"));
     std::printf("%s: %s\n", i18n::t("field_download"), dl_ok ? i18n::t("yes") : i18n::t("no"));
+    return {};
 }
 
 static std::string esc_tsv(const std::string &s) {
@@ -125,12 +121,9 @@ static std::string esc_tsv(const std::string &s) {
     return r;
 }
 
-void run_album_tsv(kb::QobuzApiService &svc, const std::string &album_id) {
+kb::Result<void> run_album_tsv(kb::QobuzApiService &svc, const std::string &album_id) {
     auto res = svc.get_album(album_id);
-    if (!res.ok()) {
-        std::fprintf(stderr, "error: %s\n", res.error().message.c_str());
-        return;
-    }
+    if (!res.ok()) return res.error();
     const auto &album = res.value();
 
     std::string title  = esc_tsv(album.title.value_or(""));
@@ -152,7 +145,7 @@ void run_album_tsv(kb::QobuzApiService &svc, const std::string &album_id) {
         title.c_str(), artist.c_str(), year.c_str(),
         label.c_str(), rtype.c_str(), hires_flag, locked_count);
 
-    if (!album.tracks || !album.tracks->items) return;
+    if (!album.tracks || !album.tracks->items) return {};
     for (auto &tp : *album.tracks->items) {
         if (!tp) continue;
         const auto &t = *tp;
@@ -168,6 +161,7 @@ void run_album_tsv(kb::QobuzApiService &svc, const std::string &album_id) {
             t.hires.value_or(false) ? 1 : 0,
             (t.parental_warning == std::optional<bool>{true}) ? 1 : 0);
     }
+    return {};
 }
 
 } // namespace inspect

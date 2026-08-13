@@ -175,6 +175,12 @@ const char *t(const char *key) {
     T("err_not_authenticated",
       "Not authenticated \xe2\x80\x94 run `streamer login` first",
       "No autenticado \xe2\x80\x94 ejecuta `streamer login` primero");
+    T("search_no_results",
+      "no results in this region",
+      "sin resultados en esta regi\xc3\xb3n");
+    T("search_no_results_anywhere",
+      "No results in any account that answered.",
+      "Sin resultados en ninguna cuenta que respondi\xc3\xb3.");
     T("err_all_accounts_failed",
       "No configured account could authenticate:",
       "Ninguna cuenta configurada pudo autenticarse:");

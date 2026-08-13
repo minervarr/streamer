@@ -125,7 +125,14 @@ public:
         if (cands.empty())
             return kb::credentials_error("no account is configured with an auth token");
 
-        std::optional<kb::Error> last;
+        // Two candidates for "the" error when everything fails, and which one
+        // is returned decides whether the user is told something true. An
+        // account that authenticated and genuinely found nothing describes the
+        // outcome ("not available anywhere I can see"); a *different* account's
+        // dead token does not — that is already reported, with a repair
+        // command, in the journal. So a verdict from work actually done
+        // outranks one from an account that never got to do any.
+        std::optional<kb::Error> verdict, last;
         for (int idx : cands) {
             auto svc = acquire(idx);
             if (!svc.ok()) {
@@ -143,8 +150,10 @@ public:
             Failure f = classify(res.error());
             record_fail(idx, f, res.error().message);
             last = res.error();
+            if (!verdict && f == Failure::Unavailable) verdict = res.error();
             if (!should_failover(f)) break;
         }
+        if (verdict) return *verdict;
         return last ? *last : kb::credentials_error("no account could serve the request");
     }
 

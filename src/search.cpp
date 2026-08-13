@@ -112,7 +112,7 @@ static bool passes(int dur, std::optional<int> mn, std::optional<int> mx) {
 
 // ── run_one ───────────────────────────────────────────────────────────────────
 
-static void run_one(kb::QobuzApiService &svc,
+static kb::Result<int> run_one(kb::QobuzApiService &svc,
                     const std::string &query,
                     const std::string &kind,
                     bool tsv,
@@ -125,7 +125,7 @@ static void run_one(kb::QobuzApiService &svc,
 
     if (kind == "tracks") {
         auto res = svc.search_tracks(query, fetch_limit, {});
-        if (!res.ok()) { std::fprintf(stderr, "Search error: %s\n", res.error().message.c_str()); return; }
+        if (!res.ok()) return res.error();
         auto items = res.value().items.value_or({});
         std::vector<decltype(items)::value_type> filtered;
         for (auto &t : items) {
@@ -157,6 +157,7 @@ static void run_one(kb::QobuzApiService &svc,
                     label.c_str(), expl.c_str());
             }
         } else {
+            if (!filtered.empty())
             std::printf("%s (%d %s):\n", i18n::t("search_tracks"), (int)filtered.size(), i18n::t("results_suffix"));
             for (auto &t : filtered) {
                 std::string title  = t->title.value_or("?");
@@ -172,28 +173,29 @@ static void run_one(kb::QobuzApiService &svc,
                     std::printf("  [%d] %s \xe2\x80\x94 %s\n", id, title.c_str(), artist.c_str());
             }
         }
-        return;
+        return (int)filtered.size();
     }
 
     if (kind == "artists") {
         auto res = svc.search_artists(query, limit, {});
-        if (!res.ok()) { std::fprintf(stderr, "Search error: %s\n", res.error().message.c_str()); return; }
+        if (!res.ok()) return res.error();
         auto items = res.value().items.value_or({});
         if (tsv) {
             for (auto &a : items)
                 std::printf("%d\t%s\t\t\t\t\t\t\tartist\t\t\n",
                     a->id.value_or(0), esc(a->name).c_str());
         } else {
+            if (!items.empty())
             std::printf("%s (%d %s):\n", i18n::t("search_artists"), (int)items.size(), i18n::t("results_suffix"));
             for (auto &a : items)
                 std::printf("  [%d] %s\n", a->id.value_or(0), a->name.value_or("?").c_str());
         }
-        return;
+        return (int)items.size();
     }
 
     if (kind == "playlists") {
         auto res = svc.search_playlists(query, fetch_limit, {});
-        if (!res.ok()) { std::fprintf(stderr, "Search error: %s\n", res.error().message.c_str()); return; }
+        if (!res.ok()) return res.error();
         auto items = res.value().items.value_or({});
         std::vector<decltype(items)::value_type> filtered;
         for (auto &p : items) {
@@ -211,6 +213,7 @@ static void run_one(kb::QobuzApiService &svc,
                     id.c_str(), nm.c_str(), dur.c_str());
             }
         } else {
+            if (!filtered.empty())
             std::printf("%s (%d %s):\n", i18n::t("search_playlists"), (int)filtered.size(), i18n::t("results_suffix"));
             for (auto &p : filtered) {
                 std::string id = p->id.value_or("?");
@@ -222,12 +225,12 @@ static void run_one(kb::QobuzApiService &svc,
                     std::printf("  [%s] %s\n", id.c_str(), nm.c_str());
             }
         }
-        return;
+        return (int)filtered.size();
     }
 
     // albums (default)
     auto res = svc.search_albums(query, fetch_limit, {});
-    if (!res.ok()) { std::fprintf(stderr, "Search error: %s\n", res.error().message.c_str()); return; }
+    if (!res.ok()) return res.error();
     auto items = res.value().items.value_or({});
     std::vector<decltype(items)::value_type> filtered;
     for (auto &a : items) {
@@ -255,6 +258,7 @@ static void run_one(kb::QobuzApiService &svc,
                 label.c_str(), expl.c_str());
         }
     } else {
+        if (!filtered.empty())
         std::printf("%s (%d %s):\n", i18n::t("search_albums"), (int)filtered.size(), i18n::t("results_suffix"));
         for (auto &a : filtered) {
             std::string title  = a->title.value_or("?");
@@ -270,25 +274,46 @@ static void run_one(kb::QobuzApiService &svc,
                     id.c_str(), title.c_str(), artist.c_str(), year.c_str());
         }
     }
+    return (int)filtered.size();
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-void run(kb::QobuzApiService &svc,
-         const std::string &query,
-         const std::string &kind,
-         bool tsv,
-         int limit,
-         std::optional<int> min_secs,
-         std::optional<int> max_secs)
+kb::Result<int> run(kb::QobuzApiService &svc,
+                    const std::string &query,
+                    const std::string &kind,
+                    bool tsv,
+                    int limit,
+                    std::optional<int> min_secs,
+                    std::optional<int> max_secs)
 {
     std::string k = normalize_type(kind);
+    int total = 0;
+    std::optional<kb::Error> first_error;
+
+    auto one = [&](const char *t) {
+        auto res = run_one(svc, query, t, tsv, limit, min_secs, max_secs);
+        if (res.ok()) total += res.value();
+        else if (!first_error) first_error = res.error();
+    };
+
     if (k == "all") {
-        for (const char *t : {"albums", "tracks", "artists", "playlists"})
-            run_one(svc, query, t, tsv, limit, min_secs, max_secs);
+        for (const char *t : {"albums", "tracks", "artists", "playlists"}) one(t);
     } else {
-        run_one(svc, query, k, tsv, limit, min_secs, max_secs);
+        one(k.c_str());
     }
+
+    // A category erroring while another returned rows is not a failed search,
+    // so the error is only fatal when nothing at all came back.
+    if (total == 0 && first_error) return *first_error;
+
+    // Nothing found, but nothing broke either. Reported as "not found" rather
+    // than as an empty success so the caller's account failover treats it as
+    // what it usually is on a multi-region setup: this catalog doesn't carry
+    // it, ask the next country. See account::classify.
+    if (total == 0) return kb::not_found_error("search results", query);
+
+    return total;
 }
 
 } // namespace search

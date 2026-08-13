@@ -94,6 +94,30 @@ static kb::QobuzApiService acquire_service(config::Config &cfg,
     std::exit(1);
 }
 
+// Runs `fn` against the selected accounts until one *succeeds at the actual
+// work* — not merely until one authenticates. That distinction is the point:
+// availability is regional, so `inspect`/`search` failing with
+// ResourceNotFound under FR is a reason to ask NZ, and only account::Pool can
+// tell that apart from a network outage (where retrying elsewhere is useless).
+//
+// Prints the walk when anything was skipped, then returns the outcome rather
+// than exiting on failure: "nothing found in any region" means different
+// things per subcommand — a valid answer to a search, a failure for an
+// inspect of one named album.
+template <class T>
+static kb::Result<T> run_with_failover(
+    config::Config &cfg, const std::string &country, int account_idx,
+    const std::function<kb::Result<T>(kb::QobuzApiService &, const config::Account &)> &fn) {
+    account::Pool pool(cfg);
+    account::Selector sel = (account_idx >= 0)
+        ? account::Selector{account::Selector::Index, "", account_idx}
+        : account::Selector::from_country(country);
+
+    auto res = pool.with_service<T>(sel, fn);
+    if (!pool.journal().empty()) std::fputs(pool.report().c_str(), stderr);
+    return res;
+}
+
 // Runs `fn` against every account `--country all` names, in health order,
 // skipping the ones that cannot authenticate. Exists because availability is
 // regional: a release absent from one country's catalog may be present in
@@ -305,14 +329,37 @@ int main(int argc, char **argv) {
                     // a column, not a banner the parser would choke on.
                     if (search_tsv) std::printf("# country\t%s\n", a.country.c_str());
                     else            std::printf("\n== %s ==\n", a.country.c_str());
-                    search::run(svc, search_query, search_kind, search_tsv, search_limit, mn, mx);
+                    auto r = search::run(svc, search_query, search_kind, search_tsv,
+                                         search_limit, mn, mx);
+                    // "Nothing here" is a real answer when you are comparing
+                    // regions — silence would read as a broken account.
+                    if (!r.ok() && !search_tsv)
+                        std::printf("  %s\n", i18n::t("search_no_results"));
                 });
                 return;
             }
 
-            config::Account acct;
-            auto svc = acquire_service(cur, search_country, search_account, acct);
-            search::run(svc, search_query, search_kind, search_tsv, search_limit, mn, mx);
+            // Failing over on a *result* miss, not just an auth one: a query
+            // that finds nothing under one region's catalog routinely finds
+            // plenty under another, and search::run reports that as
+            // ResourceNotFound precisely so this loop can act on it.
+            auto found = run_with_failover<int>(cur, search_country, search_account,
+                [&](kb::QobuzApiService &svc, const config::Account &) {
+                    return search::run(svc, search_query, search_kind, search_tsv,
+                                       search_limit, mn, mx);
+                });
+            if (!found.ok()) {
+                // A search that matches nothing is an answer, not a failure —
+                // exiting non-zero here would break every script that greps
+                // its own catalog. Anything else genuinely went wrong.
+                if (account::classify(found.error()) == account::Failure::Unavailable) {
+                    if (!search_tsv)
+                        std::printf("%s\n", i18n::t("search_no_results_anywhere"));
+                } else {
+                    std::fprintf(stderr, "%s\n", found.error().message.c_str());
+                    std::exit(1);
+                }
+            }
         });
     }
 
@@ -330,27 +377,41 @@ int main(int argc, char **argv) {
         sub->callback([&]() {
             config::Config cur = config::load();
             i18n::init(cur.settings.language);
-            config::Account acct;
-            auto svc = acquire_service(cur, inspect_country, inspect_account, acct);
-
             auto tgt = url::parse(inspect_target);
             if (!tgt) {
                 std::fprintf(stderr, "%s: %s\n",
                              i18n::t("error_parse_url"), inspect_target.c_str());
                 std::exit(1);
             }
-            std::visit([&](auto &&t) {
-                using T = std::decay_t<decltype(t)>;
-                if constexpr (std::is_same_v<T, url::Album>) {
-                    if (inspect_tsv) inspect::run_album_tsv(svc, t.id);
-                    else             inspect::run_album(svc, t.id);
-                } else if constexpr (std::is_same_v<T, url::Track>) {
-                    inspect::run_track(svc, t.id);
-                } else {
-                    std::fprintf(stderr, "inspect only supports album and track targets\n");
-                    std::exit(1);
-                }
-            }, *tgt);
+
+            // The clearest regional case there is: an album Qobuz will not
+            // serve to FR is often perfectly available to NZ. Before this,
+            // that printed "not found" and stopped.
+            auto found = run_with_failover<bool>(cur, inspect_country, inspect_account,
+                [&](kb::QobuzApiService &svc, const config::Account &) -> kb::Result<bool> {
+                    kb::Result<void> r = kb::Result<void>();
+                    std::visit([&](auto &&t) {
+                        using T = std::decay_t<decltype(t)>;
+                        if constexpr (std::is_same_v<T, url::Album>) {
+                            r = inspect_tsv ? inspect::run_album_tsv(svc, t.id)
+                                            : inspect::run_album(svc, t.id);
+                        } else if constexpr (std::is_same_v<T, url::Track>) {
+                            r = inspect::run_track(svc, t.id);
+                        } else {
+                            std::fprintf(stderr,
+                                "inspect only supports album and track targets\n");
+                            std::exit(1);
+                        }
+                    }, *tgt);
+                    if (!r.ok()) return r.error();
+                    return true;
+                });
+            // Here "not available in any region I can reach" IS the failure:
+            // the user named one specific release.
+            if (!found.ok()) {
+                std::fprintf(stderr, "%s\n", found.error().message.c_str());
+                std::exit(1);
+            }
         });
     }
 
