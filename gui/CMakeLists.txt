@@ -93,9 +93,12 @@ add_custom_command(TARGET streamer_gui POST_BUILD
         ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Book.otf
         ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
         ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-BookItalic.otf
-        ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolHei-Regular.otf
-        ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
-        ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnDotum.ttf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolSong-Regular.otf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolSong-Bold.otf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiMincho-Regular.otf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiMincho-Bold.otf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnBatang.ttf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnBatangBold.ttf
         ${CMAKE_CURRENT_BINARY_DIR}/assets/fonts/
 )
 
@@ -132,6 +135,16 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT WIN32)
             ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Book.otf
             ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
             ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-BookItalic.otf
+            # The CJK chain too. Without it a capture cannot show Chinese,
+            # Japanese or Korean text no matter how correct the code is —
+            # which makes the capture tool useless for exactly the bug it is
+            # best placed to verify.
+            ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolSong-Regular.otf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolSong-Bold.otf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiMincho-Regular.otf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiMincho-Bold.otf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnBatang.ttf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnBatangBold.ttf
             ${CMAKE_CURRENT_BINARY_DIR}/assets/fonts/
     )
 endif()

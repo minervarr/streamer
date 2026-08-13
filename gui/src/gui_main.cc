@@ -624,6 +624,11 @@ int run_selftest() {
              "a query with no country: term routes by the picker instead");
     }
 
+    // Which face serves which script, off the real fonts. No GPU and no
+    // window: RasterFont bakes on the CPU, so the metrics that decide whether
+    // Russian looks spread out are checkable here rather than by eye.
+    glyph_selftest([](bool cond, const char* what) { check(cond, what); });
+
     if (g_fail_count == 0) {
         std::printf("selftest: ok (%d assertions)\n", g_check_count);
         return 0;
@@ -747,18 +752,33 @@ int main(int argc, char** argv) {
     account::Pool accountPool(cfg);
     kb::api::set_requests_per_minute(cfg.settings.requests_per_minute);
 
-    std::string msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
-    init_fonts(host->assets(), msdf_cache);
-    upload_msdf(host->renderer(), msdf_cache);
+    std::string stale_msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
+    init_fonts(host->assets(), stale_msdf_cache);
 
-    // NewCM10 has no CJK/Hangul glyphs; bakes any missing ones from the
-    // bundled fallback fonts into the atlas on demand and pushes the grown
-    // atlas to the GPU, so typed/pasted/downloaded non-Latin text (search
-    // queries, artist/album names) actually renders instead of going blank.
-    auto ensureGlyphsFor = [&](const std::string& utf8) {
-        if (ensure_glyphs(host->assets(), msdf_cache, utf8))
-            upload_msdf(host->renderer(), msdf_cache);
+    // The sizes text is actually drawn at. Cells are per-size, and the type
+    // scale is a fraction of window height (theme::TypeScale), so this moves
+    // with every resize — refresh_glyphs() starts the sheet over when it does.
+    // Sizes not listed here (button labels derive theirs from box geometry)
+    // arrive through the miss path instead of being guessed at.
+    auto glyphSizesFor = [](float height) {
+        theme::TypeScale ts = theme::TypeScale::fromHeight(height);
+        std::vector<int> sizes = {(int)(ts.caption + 0.5f), (int)(ts.small + 0.5f),
+                                  (int)(ts.body + 0.5f),    (int)(ts.title + 0.5f),
+                                  (int)(ts.display + 0.5f)};
+        std::sort(sizes.begin(), sizes.end());
+        sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+        return sizes;
     };
+
+    // NewCM10 covers Latin, Greek and Cyrillic; Han, Kana and Hangul come
+    // from the bundled serif CJK faces. Either way a codepoint has to be baked
+    // before it can be drawn, so anything the user types or the API hands back
+    // gets scanned through here.
+    auto ensureGlyphsFor = [&](const std::string& utf8) {
+        refresh_glyphs(host->renderer(), glyphSizesFor((float)host->renderer().height()),
+                       {utf8});
+    };
+    ensureGlyphsFor(std::string());
 
     search::SearchController searchCtl(accountPool);
 
@@ -811,13 +831,20 @@ int main(int argc, char** argv) {
     // even when the query that found it wasn't — bake glyphs for the result
     // set too, not just what the user typed.
     auto ensureGlyphsForResults = [&] {
-        std::string combined;
+        std::vector<std::string> scan;
+        scan.reserve(searchCtl.results().size() * 5);
         for (const auto& r : searchCtl.results()) {
-            combined += r.title;
-            combined += r.artist;
-            combined += r.album;
+            // Every column that reaches the table, not just the first three:
+            // a Japanese release routinely carries a Japanese label and genre
+            // while its title is romanized.
+            scan.push_back(r.title);
+            scan.push_back(r.artist);
+            scan.push_back(r.album);
+            scan.push_back(r.label);
+            scan.push_back(r.genre);
         }
-        ensureGlyphsFor(combined);
+        refresh_glyphs(host->renderer(),
+                       glyphSizesFor((float)host->renderer().height()), scan);
     };
 
     // The library manager: the catalog under the configured download dir,
@@ -840,9 +867,14 @@ int main(int argc, char** argv) {
         coverCache.clear();
         libraryScrollPx = 0.0f;
         libraryLoaded = true;
-        std::string combined;
-        for (const auto& a : libraryCtl.albums()) { combined += a.title; combined += a.artist_name; }
-        ensureGlyphsFor(combined);
+        std::vector<std::string> scan;
+        scan.reserve(libraryCtl.albums().size() * 2);
+        for (const auto& a : libraryCtl.albums()) {
+            scan.push_back(a.title);
+            scan.push_back(a.artist_name);
+        }
+        refresh_glyphs(host->renderer(),
+                       glyphSizesFor((float)host->renderer().height()), scan);
     };
 
     if (demo) {
@@ -869,9 +901,17 @@ int main(int argc, char** argv) {
 
     while (!host->quit_requested()) {
         input.beginFrame();
-        host->pump(/*timeout_ms=*/1000, input);
+        // Glyphs the last frame asked for and did not have are a reason to
+        // redraw as much as a click is, and a reason not to sit in the event
+        // wait first: this loop is event-driven, so without both of these a
+        // label at a never-before-drawn size would stay blank until the user
+        // happened to move the pointer. Resolving takes a few frames (filling
+        // a glyph changes the advances after it, hence new subpixel phases),
+        // and back-to-back frames make that imperceptible.
+        bool glyphsPending = g_text_ok && g_text.hasMisses();
+        host->pump(/*timeout_ms=*/glyphsPending ? 0 : 1000, input);
 
-        bool dirty = host->take_dirty();
+        bool dirty = host->take_dirty() || glyphsPending;
         // Plain pointer motion (no click/wheel/key) never sets `dirty` — the
         // host only marks that on resize — so hover-only feedback (button
         // hover, table row hover, the ghost popup's hover timer) never
@@ -892,6 +932,17 @@ int main(int argc, char** argv) {
         Renderer& r = host->renderer();
         float w = (float)r.width(), h = (float)r.height();
         float rowH = h * 0.045f;
+
+        // Glyphs BEFORE any quad is emitted, in both directions:
+        //  - a resize moved the type scale, so the per-size cells for the new
+        //    sizes do not exist yet;
+        //  - last frame asked for a size nobody predicted (button labels size
+        //    themselves off their box) and drew nothing.
+        // Both grow the atlas and move cells, so doing either after the Canvas
+        // has emitted quads would leave those quads sampling a layout that no
+        // longer exists.
+        refresh_glyphs(r, glyphSizesFor(h), {});
+        bake_glyph_misses(r);
 
         // ── Dispatch against LAST frame's hits before drawing this frame ────
         // (nav bar + whichever screen was active when those hits were built —
@@ -1134,7 +1185,7 @@ int main(int argc, char** argv) {
         canvas.useShapes(&shapeVerts);
         canvas.useImages(&images);
         canvas.useImagesFg(&imagesFg);
-        if (g_msdf_ok) canvas.useMsdf(&g_msdf, &msdfQuads);
+        if (g_text_ok) canvas.useMsdf(&g_text, &msdfQuads);
         canvas.clear(theme::kBackground);
 
         // ── Text-field click-to-position (Canvas needed to measure text, so

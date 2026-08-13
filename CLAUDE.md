@@ -42,7 +42,24 @@ capture otherwise cannot.
 
 `streamer_gui --selftest` is the headless logic test harness (no GPU, no network) —
 `run_selftest()` in `gui/src/gui_main.cc`. Pure functions are deliberately exposed for
-it (`CycleSortKey`, `ApplySort`, `MergeByIdAcrossCountries`, `account::classify`).
+it (`CycleSortKey`, `ApplySort`, `MergeByIdAcrossCountries`, `account::classify`,
+`glyph_selftest`).
+
+### Text rendering (`gui/src/fonts.cc`)
+
+Text goes through the font engine's `RasterFont`: per-size coverage cells in a paged
+atlas, with a per-glyph fallback chain. Latin/Greek/Cyrillic come from NewCM10, Han and
+Kana from FandolSong/HaranoAjiMincho, Hangul from UnBatang — **the primary face is always
+asked first**, because every bundled CJK face also carries Cyrillic at full-width CJK
+metrics, and letting one of them win U+0400–04FF is what used to make Russian titles come
+out ~1.6x too wide.
+
+`refresh_glyphs()` bakes the eager charset plus every codepoint ≥ U+0100 found in the
+strings it is handed (results, library titles, typed queries) at the current type-scale
+sizes; any other size — button labels size themselves off their box — arrives through
+`bake_glyph_misses()`, which must run at the *top* of a frame, before any quad is emitted.
+A capture is a single frame, so `captureScreen` draws/bakes in a loop until nothing is
+missing, and it always ends on a draw. There is no atlas disk cache by design.
 
 `--share` builds universal/v3/v4/zen4 variants into `build/linux_share/` and packages
 each as a tarball under `dist/linux/`. `--packages` builds the same four variants via

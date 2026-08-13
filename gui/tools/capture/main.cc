@@ -69,43 +69,68 @@ bool captureScreen(Renderer& renderer, const std::string& screen,
     // and it draws nothing without somewhere to put its ImageDraws. It draws
     // into the FOREGROUND layer — see draw_library on why.
     std::vector<ImageDraw> images, imagesFg;
-    Canvas canvas(curves, renderer.width(), renderer.height(),
-                 g_font_ok ? &g_font : nullptr, 0, 0, 0, 0);
-    canvas.useShapes(&shapeVerts);
-    canvas.useImages(&images);
-    canvas.useImagesFg(&imagesFg);
-    if (g_msdf_ok) canvas.useMsdf(&g_msdf, &msdfQuads);
-    canvas.clear(theme::kBackground);
 
-    std::vector<gui::Hit> hits;
-    Rect navRow = {w * 0.04f, h * 0.02f, w * 0.3f, rowH};
-    int navIdx = screen == "search" ? 0 : screen == "library" ? 1 : 2;
-    widgets::drawSegmented(canvas, navRow, {"Search", "Library", "Settings"}, navIdx,
-                           theme::kSegmented);
-    Rect area = {w * 0.04f, navRow.y + navRow.h + h * 0.02f, w * 0.92f,
-               h * 0.94f - navRow.h - h * 0.02f};
+    auto build = [&] {
+        curves.clear(); shapeVerts.clear(); msdfQuads.clear();
+        images.clear(); imagesFg.clear();
 
-    gui::PointerState ptr{};
-    gui::TableInteraction table;
-    if (screen == "settings") {
-        gui::draw_settings(canvas, area, settingsCtl, settingsFields, /*focusedField=*/-1,
-                           /*accountListHover=*/-1, /*hoveredAction=*/-1, /*pointerDown=*/false,
-                           rowH, hits);
-    } else if (screen == "library") {
-        // No frame budget in a one-shot capture: every visible cover must
-        // load in this single frame, or the screenshot shows placeholders for
-        // art that exists. Raised BEFORE beginFrame(), which is what actually
-        // stocks the per-frame allowance.
-        covers.loadsPerFrame = 4096;
-        covers.beginFrame();
-        gui::draw_library(canvas, area, libraryCtl, covers, /*scrollPx=*/0.0f, rowH,
-                          /*hoveredAction=*/-1, /*pointerDown=*/false, hits);
-    } else {
-        gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/false,
-                         /*typePickerIndex=*/0, /*tableScrollPx=*/0.0f, rowH,
-                         /*hoverRow=*/-1, /*hoverHeaderCol=*/-1, /*hoveredAction=*/-1,
-                         ptr, /*dtSeconds=*/0.0f, table,
-                         countryOptions, /*countryPickerIndex=*/0, hits);
+        Canvas canvas(curves, renderer.width(), renderer.height(),
+                     g_font_ok ? &g_font : nullptr, 0, 0, 0, 0);
+        canvas.useShapes(&shapeVerts);
+        canvas.useImages(&images);
+        canvas.useImagesFg(&imagesFg);
+        if (g_text_ok) canvas.useMsdf(&g_text, &msdfQuads);
+        canvas.clear(theme::kBackground);
+
+        std::vector<gui::Hit> hits;
+        Rect navRow = {w * 0.04f, h * 0.02f, w * 0.3f, rowH};
+        int navIdx = screen == "search" ? 0 : screen == "library" ? 1 : 2;
+        widgets::drawSegmented(canvas, navRow, {"Search", "Library", "Settings"}, navIdx,
+                               theme::kSegmented);
+        Rect area = {w * 0.04f, navRow.y + navRow.h + h * 0.02f, w * 0.92f,
+                   h * 0.94f - navRow.h - h * 0.02f};
+
+        gui::PointerState ptr{};
+        gui::TableInteraction table;
+        if (screen == "settings") {
+            gui::draw_settings(canvas, area, settingsCtl, settingsFields, /*focusedField=*/-1,
+                               /*accountListHover=*/-1, /*hoveredAction=*/-1, /*pointerDown=*/false,
+                               rowH, hits);
+        } else if (screen == "library") {
+            // No frame budget in a one-shot capture: every visible cover must
+            // load in this single frame, or the screenshot shows placeholders for
+            // art that exists. Raised BEFORE beginFrame(), which is what actually
+            // stocks the per-frame allowance.
+            covers.loadsPerFrame = 4096;
+            covers.beginFrame();
+            gui::draw_library(canvas, area, libraryCtl, covers, /*scrollPx=*/0.0f, rowH,
+                              /*hoveredAction=*/-1, /*pointerDown=*/false, hits);
+        } else {
+            gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/false,
+                             /*typePickerIndex=*/0, /*tableScrollPx=*/0.0f, rowH,
+                             /*hoverRow=*/-1, /*hoverHeaderCol=*/-1, /*hoveredAction=*/-1,
+                             ptr, /*dtSeconds=*/0.0f, table,
+                             countryOptions, /*countryPickerIndex=*/0, hits);
+        }
+    };
+
+    // The live app resolves a glyph it did not have on the NEXT frame; a
+    // capture has no next frame, so it would screenshot exactly the missing
+    // text this change exists to fix.
+    //
+    // It takes several rounds, not one: a glyph that was missing had no
+    // advance either, so filling it moves every glyph after it on the line —
+    // to a new subpixel phase, which is its own cell, which is a new miss.
+    // Each round is strictly smaller (64 cells, then 31, then 17, ...) and
+    // converges in about five.
+    //
+    // The loop ALWAYS ends with a build, never with a bake: quads emitted
+    // before a bake describe an atlas layout that the bake has moved on from,
+    // and the letters baked last are exactly the ones that come out blank.
+    build();
+    for (int pass = 0; pass < 12 && g_text.hasMisses(); ++pass) {
+        bake_glyph_misses(renderer);
+        build();
     }
 
     renderer.draw(curves, /*overlay_rotation_deg=*/0, images, imagesFg,
@@ -179,15 +204,23 @@ int main(int argc, char** argv) {
     HeadlessSurfaceProvider surface(frame_w, frame_h);
     Renderer renderer(surface, assets, /*desiredSwapchainImages=*/1);
 
-    std::string msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
-    init_fonts(assets, msdf_cache);
-    upload_msdf(renderer, msdf_cache);
+    std::string stale_msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
+    init_fonts(assets, stale_msdf_cache);
 
-    // Mirrors gui_main.cc's on-demand CJK/Hangul glyph bake, so a --query
-    // with non-Latin text renders the same as it would live instead of
-    // silently going blank in the capture.
-    if (ensure_glyphs(assets, msdf_cache, query))
-        upload_msdf(renderer, msdf_cache);
+    // The same sizes gui_main.cc bakes, from the same type scale, so a capture
+    // exercises the cells the live app would.
+    auto glyphSizes = [&] {
+        theme::TypeScale ts = theme::TypeScale::fromHeight((float)renderer.height());
+        std::vector<int> sizes = {(int)(ts.caption + 0.5f), (int)(ts.small + 0.5f),
+                                  (int)(ts.body + 0.5f),    (int)(ts.title + 0.5f),
+                                  (int)(ts.display + 0.5f)};
+        std::sort(sizes.begin(), sizes.end());
+        sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+        return sizes;
+    };
+    // Mirrors gui_main.cc's glyph bake, so a --query with non-Latin text
+    // renders the same as it would live instead of going blank in the capture.
+    refresh_glyphs(renderer, glyphSizes(), {query});
 
     search::SearchController searchCtl(accountPool);
     widgets::TextFieldState queryField;
@@ -211,10 +244,21 @@ int main(int argc, char** argv) {
                              : library_root);
     libraryCtl.reload();
     {
-        // Album/artist names can be non-Latin just like a search result's.
-        std::string combined;
-        for (const auto& al : libraryCtl.albums()) { combined += al.title; combined += al.artist_name; }
-        if (ensure_glyphs(assets, msdf_cache, combined)) upload_msdf(renderer, msdf_cache);
+        // Album/artist names can be non-Latin just like a search result's,
+        // and so can the columns of the results the search above returned.
+        std::vector<std::string> scan;
+        for (const auto& al : libraryCtl.albums()) {
+            scan.push_back(al.title);
+            scan.push_back(al.artist_name);
+        }
+        for (const auto& r : searchCtl.results()) {
+            scan.push_back(r.title);
+            scan.push_back(r.artist);
+            scan.push_back(r.album);
+            scan.push_back(r.label);
+            scan.push_back(r.genre);
+        }
+        refresh_glyphs(renderer, glyphSizes(), scan);
     }
     if (library_confirm || library_select) {
         libraryCtl.toggle_selected(0);
