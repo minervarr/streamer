@@ -109,6 +109,8 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
                  int hoverRow, int hoverHeaderCol, int hoveredAction,
                  const PointerState& pointer, float dtSeconds,
                  TableInteraction& table,
+                 const std::vector<std::string_view>& countryOptions,
+                 int countryPickerIndex,
                  std::vector<Hit>& hits) {
     float pad = area.h * 0.015f;
     float y = area.y;
@@ -141,6 +143,20 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
     auto typeRects = widgets::segmentRects(typeRow, kTypePickerCount);
     for (int i = 0; i < kTypePickerCount; i++) hits.push_back({typeRects[(size_t)i], ActTypePickerBase + i});
     y += typeRow.h + pad;
+
+    // ── Country picker ───────────────────────────────────────────────────────
+    // Availability is regional, so which account answers decides what the
+    // catalog even contains. Hidden below two options because a single-account
+    // setup has no region choice worth making.
+    if (countryOptions.size() > 1) {
+        Rect countryRow = {area.x, y, area.w, rowH * 0.9f};
+        widgets::drawSegmented(c, countryRow, countryOptions, countryPickerIndex,
+                               theme::kSegmented);
+        auto countryRects = widgets::segmentRects(countryRow, (int)countryOptions.size());
+        for (size_t i = 0; i < countryOptions.size(); i++)
+            hits.push_back({countryRects[i], ActCountryPickerBase + (int)i});
+        y += countryRow.h + pad;
+    }
 
     // ── Cheatsheet panel (expandable, per the "?" toggle) ───────────────────
     if (ctl.cheatsheet_open()) {

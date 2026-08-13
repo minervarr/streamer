@@ -60,6 +60,10 @@ enum Action : int {
     ActTypePickerBase = 100,      // + index (0..5: Smart/Albums/Tracks/Artists/Playlists/All)
     ActTableHeaderBase = 200,     // + column index
     ActTableRowBase    = 300,     // + row index (toggles selection)
+    // + index into the caller's country option list. Ranges above stay clear
+    // of it because a results table can be arbitrarily long, so this one is
+    // deliberately the highest.
+    ActCountryPickerBase = 100000,
 };
 
 // Settings screen actions — separate numbering from Action above (only one
@@ -116,12 +120,20 @@ search::SortColumn sortColumnForTableIndex(int col);
 // hover/press feedback. `pointer`/`dtSeconds`/`table` drive the results
 // table's column-resize drag and hover-reveal popup (see TableInteraction).
 // Fills `hits` for this frame.
+//
+// `countryOptions` are the labels for the region picker ("Auto", "All", then
+// one per configured account) and `countryPickerIndex` the current selection.
+// They are caller-supplied rather than a constant like kTypePickerOptions
+// because they come from config.toml, which changes while the app runs.
+// Passing an empty list hides the picker — one account needs no region choice.
 void draw_search(Canvas& c, const Rect& area, const search::SearchController& ctl,
                  const widgets::TextFieldState& queryField, bool queryFocused,
                  int typePickerIndex, float tableScrollPx, float rowH,
                  int hoverRow, int hoverHeaderCol, int hoveredAction,
                  const PointerState& pointer, float dtSeconds,
                  TableInteraction& table,
+                 const std::vector<std::string_view>& countryOptions,
+                 int countryPickerIndex,
                  std::vector<Hit>& hits);
 
 constexpr std::string_view kQualityOptions[] = {"MP3", "FLAC", "FLAC-HI", "FLAC-ULTRA"};

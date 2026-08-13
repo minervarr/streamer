@@ -1,3 +1,4 @@
+#include "account_pool.hh"
 #include "backup.hh"
 #include "config.hh"
 #include "download.hh"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -40,17 +42,91 @@ static kb::QobuzApiService build_api(const config::Account &acct) {
     return res.take();
 }
 
-static kb::QobuzApiService build_authenticated_api(const config::Account &acct) {
-    if (acct.auth_token.empty()) {
+// Acquires a logged-in service, walking the health-ranked accounts until one
+// authenticates. Replaces the old "take accounts.front(), die on its 401"
+// path, which failed every subcommand whenever the first stored token had
+// expired — even with a perfectly good account one slot below.
+//
+// The chosen account is copied into `chosen_out` (callers need its country
+// for the download tier). Builds services itself rather than through
+// Pool::acquire because the CLI runs one command against one account and then
+// exits; the pool's cross-call service cache only earns its keep in the GUI.
+static kb::QobuzApiService acquire_service(config::Config &cfg,
+                                           const std::string &country,
+                                           int account_idx,
+                                           config::Account &chosen_out) {
+    account::Pool pool(cfg);
+    account::Selector sel = (account_idx >= 0)
+        ? account::Selector{account::Selector::Index, "", account_idx}
+        : account::Selector::from_country(country);
+
+    std::vector<int> cands = pool.candidates(sel);
+    if (cands.empty()) {
         std::fprintf(stderr, "%s\n", i18n::t("err_not_authenticated"));
         std::exit(1);
     }
-    auto res = qobuz::make_service(acct);
-    if (!res.ok()) {
-        std::fprintf(stderr, "Auth error: %s\n", res.error().message.c_str());
+
+    for (int idx : cands) {
+        const config::Account &acct = cfg.accounts[idx];
+        if (acct.auth_token.empty()) continue;
+
+        auto res = qobuz::make_service(acct);
+        if (res.ok()) {
+            pool.record_ok(idx);
+            // Only worth narrating when something was actually skipped —
+            // a healthy run stays as quiet as it always was.
+            if (!pool.journal().empty()) {
+                std::fputs(pool.report().c_str(), stderr);
+                std::fprintf(stderr, "-> %s %s\n", i18n::t("acct_using"),
+                             acct.country.empty() ? "(no country)" : acct.country.c_str());
+            }
+            chosen_out = acct;
+            return res.take();
+        }
+
+        account::Failure f = account::classify(res.error());
+        pool.record_fail(idx, f, res.error().message);
+        if (!account::should_failover(f)) break;
+    }
+
+    std::fprintf(stderr, "%s\n", i18n::t("err_all_accounts_failed"));
+    std::fputs(pool.report().c_str(), stderr);
+    std::exit(1);
+}
+
+// Runs `fn` against every account `--country all` names, in health order,
+// skipping the ones that cannot authenticate. Exists because availability is
+// regional: a release absent from one country's catalog may be present in
+// another's, and the only way to see that is to ask each account in turn.
+// Exits with a report if not one of them authenticated.
+static void for_each_service(
+    config::Config &cfg,
+    const std::function<void(kb::QobuzApiService &, const config::Account &)> &fn) {
+    account::Pool pool(cfg);
+    bool any = false;
+
+    for (int idx : pool.candidates(account::Selector{account::Selector::All})) {
+        const config::Account &acct = cfg.accounts[idx];
+        if (acct.auth_token.empty()) continue;
+
+        auto res = qobuz::make_service(acct);
+        if (!res.ok()) {
+            pool.record_fail(idx, account::classify(res.error()), res.error().message);
+            continue;
+        }
+        pool.record_ok(idx);
+        any = true;
+        auto svc = res.take();
+        fn(svc, acct);
+    }
+
+    // Report what was skipped either way: on success it explains why a region
+    // is missing from the output, and on failure it is the whole diagnosis.
+    if (!pool.journal().empty()) std::fputs(pool.report().c_str(), stderr);
+    if (!any) {
+        std::fprintf(stderr, "%s\n", i18n::t("err_all_accounts_failed"));
         std::exit(1);
     }
-    return res.take();
 }
 
 // Library root for the `library` subcommands: --root wins, otherwise the
@@ -76,12 +152,9 @@ static config::Account &select_account(config::Config &cfg, const std::string &c
     return cfg.accounts.front();
 }
 
-// Find account by index (GUI uses --account N).
-static config::Account &select_account_idx(config::Config &cfg, int idx) {
-    if (cfg.accounts.empty()) cfg.accounts.push_back({});
-    if (idx >= 0 && idx < (int)cfg.accounts.size()) return cfg.accounts[idx];
-    return cfg.accounts.front();
-}
+// (Account-by-index lookup now lives in account::Pool, which needs it as a
+// Selector mode rather than a bare reference — see acquire_service above.
+// `select_account` stays because `login` writes *into* the account it finds.)
 
 // ── main ──────────────────────────────────────────────────────────────────────
 
@@ -174,10 +247,8 @@ int main(int argc, char **argv) {
         sub->callback([&]() {
             config::Config cur = config::load();
             i18n::init(cur.settings.language);
-            const config::Account &acct = (dl_account >= 0)
-                ? select_account_idx(cur, dl_account)
-                : select_account(cur, dl_country);
-            auto svc = build_authenticated_api(acct);
+            config::Account acct;
+            auto svc = acquire_service(cur, dl_country, dl_account, acct);
 
             std::string quality = dl_quality.empty() ? cur.settings.quality : dl_quality;
             std::string outdir  = dl_output.empty()
@@ -204,17 +275,13 @@ int main(int argc, char **argv) {
         sub->add_option("-n,--limit", search_limit,   "Max results per category");
         sub->add_option("--min-dur",  search_min_dur, "Min duration (e.g. 5m, 1:30)");
         sub->add_option("--max-dur",  search_max_dur, "Max duration");
-        sub->add_option("--country",  search_country, "Account country code");
+        sub->add_option("--country",  search_country, "Account country code, or `all` to search every account");
         sub->add_option("--account",  search_account, "Account index (GUI)");
         sub->add_flag("--tsv",        search_tsv,     "Tab-separated output");
 
         sub->callback([&]() {
             config::Config cur = config::load();
             i18n::init(cur.settings.language);
-            const config::Account &acct = (search_account >= 0)
-                ? select_account_idx(cur, search_account)
-                : select_account(cur, search_country);
-            auto svc = build_authenticated_api(acct);
 
             std::optional<int> mn, mx;
             if (!search_min_dur.empty()) {
@@ -229,6 +296,22 @@ int main(int argc, char **argv) {
                 if (err) { std::fprintf(stderr, "Error: %s\n", err->c_str()); std::exit(1); }
                 mx = s;
             }
+            // `--country all` asks every account and labels each block, so a
+            // release missing from one region is visibly present in another.
+            // Anything else is the normal single-account path with failover.
+            if (account::Selector::from_country(search_country).mode == account::Selector::All) {
+                for_each_service(cur, [&](kb::QobuzApiService &svc, const config::Account &a) {
+                    // The TSV form is machine-read, so the country belongs in
+                    // a column, not a banner the parser would choke on.
+                    if (search_tsv) std::printf("# country\t%s\n", a.country.c_str());
+                    else            std::printf("\n== %s ==\n", a.country.c_str());
+                    search::run(svc, search_query, search_kind, search_tsv, search_limit, mn, mx);
+                });
+                return;
+            }
+
+            config::Account acct;
+            auto svc = acquire_service(cur, search_country, search_account, acct);
             search::run(svc, search_query, search_kind, search_tsv, search_limit, mn, mx);
         });
     }
@@ -247,10 +330,8 @@ int main(int argc, char **argv) {
         sub->callback([&]() {
             config::Config cur = config::load();
             i18n::init(cur.settings.language);
-            const config::Account &acct = (inspect_account >= 0)
-                ? select_account_idx(cur, inspect_account)
-                : select_account(cur, inspect_country);
-            auto svc = build_authenticated_api(acct);
+            config::Account acct;
+            auto svc = acquire_service(cur, inspect_country, inspect_account, acct);
 
             auto tgt = url::parse(inspect_target);
             if (!tgt) {
@@ -459,10 +540,9 @@ int main(int argc, char **argv) {
             library::AlbumFetcher fetch;
             if (!lib_offline) {
                 config::Config cur = config::load();
-                const config::Account &acct = (lib_account >= 0)
-                    ? select_account_idx(cur, lib_account)
-                    : select_account(cur, lib_country);
-                auto svc = std::make_shared<kb::QobuzApiService>(build_authenticated_api(acct));
+                config::Account acct;
+                auto svc = std::make_shared<kb::QobuzApiService>(
+                    acquire_service(cur, lib_country, lib_account, acct));
                 fetch = [svc](const std::string &album_id) -> std::optional<kb::Album> {
                     auto res = svc->get_album(album_id, std::string("track_ids"));
                     if (!res.ok()) return std::nullopt;
@@ -637,10 +717,8 @@ int main(int argc, char **argv) {
 
         sub->callback([&]() {
             config::Config cur = config::load();
-            const config::Account &acct = (rc_account >= 0)
-                ? select_account_idx(cur, rc_account)
-                : select_account(cur, rc_country);
-            auto svc = build_authenticated_api(acct);
+            config::Account acct;
+            auto svc = acquire_service(cur, rc_country, rc_account, acct);
 
             // The bundle carries one seed per timezone and only one of them
             // signs correctly, so a candidate is only trustworthy once it has

@@ -351,7 +351,17 @@ bool MatchFilter(const FilterNode& f, const SearchResult& r) {
     if (field == "label")  return f.op == "=" ? EqualsI(r.label,  f.value) : ContainsI(r.label,  f.value);
     if (field == "type")    return f.op == "=" ? EqualsI(r.type, NormalizeType(f.value))
                                                  : ContainsI(r.type, NormalizeType(f.value));
-    if (field == "country") return f.op == "=" ? EqualsI(r.country, f.value) : ContainsI(r.country, f.value);
+    // `country:` is primarily a *routing* term — SearchController reads it via
+    // ExtractCountryHint to pick which account(s) to ask, and tags each row
+    // with the account that served it. It then also filters here, which is
+    // what makes `country:NZ` meaningful against a multi-country result set.
+    // `country:all` is the routing keyword for "every account", so it must
+    // pass everything through rather than look for a region literally named
+    // "all" and hide every row.
+    if (field == "country") {
+        if (EqualsI(f.value, "all")) return true;
+        return f.op == "=" ? EqualsI(r.country, f.value) : ContainsI(r.country, f.value);
+    }
 
     if (field == "hires") {
         std::string v = NormalizeBool(f.value);
@@ -422,6 +432,15 @@ void CollectTypeHints(const QueryNode& node, std::vector<std::string>& out) {
     if (node.right) CollectTypeHints(*node.right, out);
 }
 
+void CollectCountryHints(const QueryNode& node, std::vector<std::string>& out) {
+    if (node.kind == NodeKind::Filter && node.filter.field == "country") {
+        out.push_back(node.filter.value);
+        return;
+    }
+    if (node.left)  CollectCountryHints(*node.left,  out);
+    if (node.right) CollectCountryHints(*node.right, out);
+}
+
 } // namespace
 
 // ── Public API ──────────────────────────────────────────────────────────
@@ -466,6 +485,12 @@ std::string ExtractBaseTerm(const QueryNode& node) {
 std::string ExtractTypeHint(const QueryNode& node) {
     std::vector<std::string> hints;
     CollectTypeHints(node, hints);
+    return hints.empty() ? "" : hints[0];
+}
+
+std::string ExtractCountryHint(const QueryNode& node) {
+    std::vector<std::string> hints;
+    CollectCountryHints(node, hints);
     return hints.empty() ? "" : hints[0];
 }
 

@@ -8,6 +8,7 @@
 // pointer state, then draw fresh Hit rects for the next iteration — this
 // avoids needing draw() to return geometry before it has computed it.
 
+#include "account_pool.hh"
 #include "config.hh"
 #include "download.hh"
 #include "fonts.hh"
@@ -513,6 +514,116 @@ int run_selftest() {
         fs::remove_all(root);
     }
 
+    // ── account::Pool: failover policy ────────────────────────────────────
+    // The bug this exists for: a stored token expires, its account happens to
+    // sit first in config.toml, and every command dies on a bare 401 while a
+    // working account sits one slot below. classify() and ranked() are pure,
+    // so the whole policy is testable with no network and no config file.
+    {
+        using account::Failure;
+
+        kb::Error e401 = kb::api_error_response(401, "User authentication is required", "error");
+        check(account::classify(e401) == Failure::Auth,
+             "a 401 from Qobuz classifies as an auth failure");
+        check(account::classify(kb::not_found_error("album", "123")) == Failure::Unavailable,
+             "a not-found classifies as regionally unavailable");
+        check(account::classify(kb::rate_limit_error("slow down")) == Failure::Network,
+             "rate limiting classifies as Network");
+
+        check(account::should_failover(Failure::Auth) &&
+              account::should_failover(Failure::Unavailable),
+             "auth and availability failures are worth retrying on another account");
+        // The important negative: the limit is per app_id and every account
+        // shares one, so walking accounts multiplies the requests and cannot
+        // possibly help. Same for a dead link.
+        check(!account::should_failover(Failure::Network) &&
+              !account::should_failover(Failure::Other),
+             "network and rate-limit failures do NOT walk the account list");
+
+        const int64_t now = 1'000'000'000;
+        config::Config cfg;
+        config::Account dead;  dead.country = "FR"; dead.auth_token = "t1";
+        dead.last_fail = now - 60; dead.fail_reason = "auth";
+        config::Account live;  live.country = "NZ"; live.auth_token = "t2";
+        live.last_ok = now - 60;
+        config::Account notok; notok.country = "US";  // no token — unusable
+        cfg.accounts = {dead, live, notok};
+
+        account::Pool pool(cfg);
+        auto order = pool.ranked(now);
+        check(order.size() == 2, "ranked() skips accounts with no auth token");
+        check(order.size() == 2 && order[0] == 1 && order[1] == 0,
+             "a recently auth-failed account ranks below a known-good one");
+
+        // A revoked token can be repaired elsewhere, so a demotion must expire
+        // — otherwise one bad day blacklists a good account permanently.
+        auto later = pool.ranked(now + 7 * 60 * 60);
+        check(later.size() == 2 && later[0] == 1 && later[1] == 0,
+             "a known-good account still leads once the demotion expires");
+        check(std::find(later.begin(), later.end(), 0) != later.end(),
+             "an expired demotion puts the account back in the running");
+
+        // An explicit --country is a preference, not a hard pin: the named
+        // account leads, but the rest still back it up.
+        auto pinned = pool.candidates(account::Selector::from_country("FR"));
+        check(!pinned.empty() && pinned[0] == 0,
+             "--country FR tries FR first");
+        check(pinned.size() == 2,
+             "--country FR still falls back to the other accounts behind it");
+
+        check(account::Selector::from_country("all").mode == account::Selector::All,
+             "--country all selects every account");
+        check(account::Selector::from_country("").mode == account::Selector::Auto,
+             "no --country means health-ranked auto selection");
+    }
+
+    // ── country:all merge ─────────────────────────────────────────────────
+    // Asking every account for the same query returns the same release once
+    // per region. Showing those as separate rows would bury the answer the
+    // user actually wanted, which is *where* a release can be had.
+    {
+        auto row = [](const char* id, const char* type, const char* country) {
+            query_dsl::SearchResult r;
+            r.id = id; r.type = type; r.country = country;
+            return r;
+        };
+        std::vector<query_dsl::SearchResult> rows = {
+            row("A1", "album", "FR"),
+            row("A2", "album", "FR"),
+            row("A1", "album", "NZ"),   // same release, second region
+            row("A1", "track", "NZ"),   // same id, different kind — must NOT merge
+        };
+        search::MergeByIdAcrossCountries(rows);
+
+        check(rows.size() == 3, "the same release from two accounts collapses to one row");
+        check(rows[0].id == "A1" && rows[0].country == "FR, NZ",
+             "the merged row lists every region that offered it");
+        check(rows[1].id == "A2" && rows[1].country == "FR",
+             "a release only one account had keeps its single region");
+        // Qobuz ids are only unique within a kind, so keying on id alone would
+        // let an album and a track swallow each other.
+        check(rows[2].id == "A1" && rows[2].type == "track",
+             "an identical id of a different type stays its own row");
+        check(rows[0].type == "album",
+             "the merge preserves the first sighting's position and fields");
+
+        // country: routes as well as filters, so the routing keyword has to
+        // survive the filter pass. Treated naively, `country:all` would look
+        // for a region literally named "all" and hide every single row.
+        query_dsl::SearchResult nz;
+        nz.country = "NZ"; nz.type = "album"; nz.title = "x";
+        check(query_dsl::Match(query_dsl::Parse("country:all"), nz),
+             "country:all is a routing keyword and filters nothing out");
+        check(query_dsl::Match(query_dsl::Parse("country:NZ"), nz),
+             "country:NZ matches a row served by the NZ account");
+        check(!query_dsl::Match(query_dsl::Parse("country:FR"), nz),
+             "country:FR excludes a row only NZ could serve");
+        check(query_dsl::ExtractCountryHint(query_dsl::Parse("daft country:NZ")) == "NZ",
+             "ExtractCountryHint pulls the routing country out of the query");
+        check(query_dsl::ExtractCountryHint(query_dsl::Parse("daft punk")).empty(),
+             "a query with no country: term routes by the picker instead");
+    }
+
     if (g_fail_count == 0) {
         std::printf("selftest: ok (%d assertions)\n", g_check_count);
         return 0;
@@ -558,22 +669,38 @@ std::string previewCell(int row, int col) {
 // dispatch (src/download.hh's dl::run), off the render thread so a slow
 // transfer never blocks the UI. No progress UI in this phase — a Downloads
 // screen is future work; this proves the in-process, no-subprocess wiring.
-void download_async(const config::Account& account, std::string quality,
-                    std::string download_dir, std::string country,
+// Takes the pool by pointer rather than an account by value so a download
+// started while the first account's token is dead still lands, on whichever
+// account can actually serve it. The pool outlives every worker (it lives for
+// the whole of main), and Pool's own locking makes the shared access safe.
+void download_async(account::Pool* pool, const account::Selector& sel,
+                    std::string quality, std::string download_dir,
                     int concurrency, std::vector<std::string> ids) {
     if (concurrency < 1) concurrency = 1;
-    std::thread([account, quality, download_dir, country, concurrency, ids]() {
-        auto res = qobuz::make_service(account);
-        if (!res.ok()) {
-            std::fprintf(stderr, "[download] %s\n", res.error().message.c_str());
+    std::thread([pool, sel, quality, download_dir, concurrency, ids]() {
+        for (int idx : pool->candidates(sel)) {
+            auto svc = pool->acquire(idx);
+            if (!svc.ok()) {
+                account::Failure f = account::classify(svc.error());
+                pool->record_fail(idx, f, svc.error().message);
+                std::fprintf(stderr, "[download] %s\n", svc.error().message.c_str());
+                if (!account::should_failover(f)) return;
+                continue;
+            }
+            pool->record_ok(idx);
+            // The country tier the files land under must be the account that
+            // actually fetched them (<root>/<country>/<album>/…), or the
+            // library catalog would record a region the bytes never came from.
+            const std::string country = pool->config().accounts[idx].country;
+            for (auto& id : ids) {
+                bool ok = dl::run(*svc.value(), id, quality, download_dir, country,
+                                  concurrency, true, true);
+                std::fprintf(stderr, "[download] %s (%s): %s\n", id.c_str(),
+                             country.c_str(), ok ? "done" : "failed");
+            }
             return;
         }
-        auto svc = res.take();
-        for (auto& id : ids) {
-            bool ok = dl::run(svc, id, quality, download_dir, country, concurrency,
-                              true, true);
-            std::fprintf(stderr, "[download] %s: %s\n", id.c_str(), ok ? "done" : "failed");
-        }
+        std::fprintf(stderr, "[download] no account could authenticate\n");
     }).detach();
 }
 
@@ -612,7 +739,12 @@ int main(int argc, char** argv) {
 
     config::Config cfg = config::load();
     if (cfg.accounts.empty()) cfg.accounts.push_back({});
-    const config::Account& account = cfg.accounts.front();
+    // One long-lived pool, not a captured cfg.accounts.front(). The old code
+    // bound the *first* account once at startup, so an expired token in slot 0
+    // broke search and downloads for the whole session and the Settings
+    // account picker had no effect on either. The pool re-picks per request,
+    // fails over, and caches one authenticated service per account.
+    account::Pool accountPool(cfg);
     kb::api::set_requests_per_minute(cfg.settings.requests_per_minute);
 
     std::string msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
@@ -628,7 +760,32 @@ int main(int argc, char** argv) {
             upload_msdf(host->renderer(), msdf_cache);
     };
 
-    search::SearchController searchCtl(account);
+    search::SearchController searchCtl(accountPool);
+
+    // Region picker for the search bar: "Auto" (health-ranked, fails over),
+    // "All" (ask every account and merge), then one entry per configured
+    // account. Rebuilt whenever accounts change, since it mirrors config.toml.
+    std::vector<std::string> countryOptions;
+    std::vector<std::string_view> countryOptionViews;
+    int countryPickerIndex = 0;
+    auto rebuildCountryOptions = [&]() {
+        countryOptions.clear();
+        countryOptions.emplace_back("Auto");
+        countryOptions.emplace_back("All");
+        for (const config::Account& a : cfg.accounts)
+            countryOptions.push_back(a.country.empty() ? "?" : a.country);
+        countryOptionViews.assign(countryOptions.begin(), countryOptions.end());
+        if (countryPickerIndex >= (int)countryOptions.size()) countryPickerIndex = 0;
+    };
+    // Index 0/1 are the two modes; everything past them addresses an account
+    // positionally, which is exactly why account order in config.toml is never
+    // rewritten (see config::Account's health fields).
+    auto selectorForCountryIndex = [&](int i) -> account::Selector {
+        if (i <= 0) return account::Selector{};                       // Auto
+        if (i == 1) return account::Selector{account::Selector::All}; // All
+        return account::Selector{account::Selector::Index, "", i - 2};
+    };
+    rebuildCountryOptions();
     widgets::TextFieldState queryField;
     int typePickerIndex = 0;
     float tableScrollPx = 0.0f;
@@ -806,19 +963,40 @@ int main(int argc, char** argv) {
                 } else if (hit.action >= gui::ActTableHeaderBase && hit.action < gui::ActTableRowBase) {
                     auto sc = gui::sortColumnForTableIndex(hit.action - gui::ActTableHeaderBase);
                     if (sc != search::SortColumn::None) searchCtl.sort(sc);
+                // Must precede the ActTableRowBase catch-all below: the row
+                // range is open-ended (one action per result), so anything
+                // tested after it would never be reached.
+                } else if (hit.action >= gui::ActCountryPickerBase) {
+                    countryPickerIndex = hit.action - gui::ActCountryPickerBase;
+                    searchCtl.set_selector(selectorForCountryIndex(countryPickerIndex));
                 } else if (hit.action >= gui::ActTableRowBase) {
                     searchCtl.toggle_selected(hit.action - gui::ActTableRowBase);
                 } else if (hit.action == gui::ActDownloadSelected && !searchCtl.selected().empty()) {
                     std::vector<std::string> ids(searchCtl.selected().begin(), searchCtl.selected().end());
-                    download_async(account, settingsCtl.config().settings.quality,
+                    // Same selector the results came from, so a row found via
+                    // NZ is downloaded through NZ rather than through whatever
+                    // account happens to sit first.
+                    download_async(&accountPool, searchCtl.selector(),
+                                  settingsCtl.config().settings.quality,
                                   settingsCtl.config().settings.download_dir.string(),
-                                  account.country,
                                   (int)settingsCtl.config().settings.concurrency, ids);
                     searchCtl.clear_selection();
                 }
             } else {  // Screen::Settings
                 if (hit.action >= gui::ActAccountListBase && hit.action < gui::ActQualityBase) {
-                    settingsCtl.select_account(hit.action - gui::ActAccountListBase);
+                    const int picked = hit.action - gui::ActAccountListBase;
+                    settingsCtl.select_account(picked);
+                    // Picking an account here used to change only which
+                    // account the edit form showed — search and downloads
+                    // stayed pinned to accounts.front() regardless. Routing it
+                    // into the search selector is what makes the control mean
+                    // what it looks like it means.
+                    searchCtl.set_selector(
+                        account::Selector{account::Selector::Index, "", picked});
+                    // Keep the search bar's region picker showing the same
+                    // account, so the two controls never disagree about which
+                    // one searches are going to.
+                    countryPickerIndex = picked + 2;  // past Auto/All
                 } else if (hit.action == gui::ActAddAccount) {
                     settingsCtl.add_account();
                 } else if (hit.action == gui::ActRemoveAccount) {
@@ -859,6 +1037,15 @@ int main(int argc, char** argv) {
                     settingsCtl.mutable_settings().download_dir = settingsFields[gui::FieldDownloadDir].text;
                     settingsCtl.save();
                     kb::api::set_requests_per_minute(settingsCtl.config().settings.requests_per_minute);
+                    // SettingsController edits its own copy of the config and
+                    // writes it to disk; the pool borrows a different one.
+                    // Re-read it and drop the cached (now stale-credentialed)
+                    // services so a token repaired here takes effect at once
+                    // instead of only after a restart.
+                    cfg = config::load();
+                    if (cfg.accounts.empty()) cfg.accounts.push_back({});
+                    accountPool.reload();
+                    rebuildCountryOptions();
                 } else if (hit.action >= gui::ActFieldFocusBase && hit.action < gui::ActFieldFocusBase + gui::FieldCount) {
                     focusedField = hit.action - gui::ActFieldFocusBase;
                 }
@@ -1046,7 +1233,8 @@ int main(int argc, char** argv) {
                 gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/true,
                                  typePickerIndex, tableScrollPx, rowH,
                                  hoverRow, hoverHeaderCol, hoveredAction,
-                                 ptr, dtSeconds, tableInteraction, hits);
+                                 ptr, dtSeconds, tableInteraction,
+                                 countryOptionViews, countryPickerIndex, hits);
             } else if (activeScreen == Screen::Library) {
                 coverCache.beginFrame();
                 gui::draw_library(canvas, area, libraryCtl, coverCache, libraryScrollPx, rowH,

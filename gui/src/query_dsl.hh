@@ -64,6 +64,13 @@ std::string ExtractBaseTerm(const QueryNode& node);
 // empty string if none.
 std::string ExtractTypeHint(const QueryNode& node);
 
+// Extract a country: filter if present — a country code ("NZ") or the
+// keyword "all". Unlike the other fields this one *routes*: it decides which
+// account(s) SearchController asks, because availability is regional and a
+// result set can only contain what the queried account can see. Empty string
+// when the query says nothing about country.
+std::string ExtractCountryHint(const QueryNode& node);
+
 // Count of filter/term nodes satisfied — higher = better match, for ranking
 // results that pass Match() but should still be ordered by relevance.
 int Score(const QueryNode& node, const SearchResult& r);

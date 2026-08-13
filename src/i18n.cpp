@@ -175,6 +175,12 @@ const char *t(const char *key) {
     T("err_not_authenticated",
       "Not authenticated \xe2\x80\x94 run `streamer login` first",
       "No autenticado \xe2\x80\x94 ejecuta `streamer login` primero");
+    T("err_all_accounts_failed",
+      "No configured account could authenticate:",
+      "Ninguna cuenta configurada pudo autenticarse:");
+    T("acct_using",
+      "using account",
+      "usando la cuenta");
     T("err_app_id_not_set",
       "app_id is not set for this account. Edit it in Settings.",
       "app_id no est\xc3\xa1 configurado para esta cuenta. Ed\xc3\xadtalo en Configuraci\xc3\xb3n.");

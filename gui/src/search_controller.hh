@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include "account_pool.hh"
+
 namespace config { struct Account; }
 
 namespace search {
@@ -50,15 +52,36 @@ void CycleSortKey(std::vector<SortKey>& keys, SortColumn col);
 // `keys` is empty. Pure function, same testability rationale as above.
 void ApplySort(std::vector<query_dsl::SearchResult>& results, const std::vector<SortKey>& keys);
 
+// Collapses the same release returned by several accounts into one row whose
+// `country` lists every region that offered it ("FR, NZ"). Used after a
+// `country:all` search, which asks every account and would otherwise show one
+// duplicate per account — burying the very thing the user asked for: where
+// can I actually get this? First sighting keeps its position, so the API's
+// relevance order survives. Pure function, exposed for the same headless
+// testability reason as CycleSortKey/ApplySort above.
+void MergeByIdAcrossCountries(std::vector<query_dsl::SearchResult>& rows);
+
 class SearchController {
 public:
-    // `account` may have empty app_id/app_secret (no account configured
-    // yet) — that's a normal state, not an error: has_service() reports it,
-    // and search() fails gracefully with last_error() rather than crashing
-    // or requiring a valid service to exist up front.
-    explicit SearchController(const config::Account& account);
+    // Takes the pool rather than one account, because binding a single
+    // account here was the bug: the GUI captured cfg.accounts.front() once
+    // at startup, so a dead token in slot 0 broke search permanently and the
+    // Settings account picker had no effect on it. `pool` must outlive this.
+    //
+    // An empty pool (no account configured yet) is a normal state, not an
+    // error: has_service() reports it and search() fails gracefully with
+    // last_error() rather than crashing.
+    explicit SearchController(account::Pool& pool);
 
-    bool has_service() const { return svc_.has_value(); }
+    // True when at least one configured account carries a token — i.e. when
+    // a search has any chance of working. Whether that account's token is
+    // still *valid* is only knowable by asking Qobuz, which search() does.
+    bool has_service() const;
+
+    // Which account(s) searches go to. Set from the search bar's country
+    // picker; the query's own `country:` term overrides it per-search.
+    void set_selector(const account::Selector& sel) { selector_ = sel; ++revision_; }
+    const account::Selector& selector() const { return selector_; }
 
     // Parses `query_text` (the DSL), extracts a base search term and a
     // type hint, calls the matching kb:: search endpoint(s), applies
@@ -107,7 +130,8 @@ public:
     uint64_t revision() const { return revision_; }
 
 private:
-    std::optional<kb::QobuzApiService> svc_;
+    account::Pool* pool_ = nullptr;
+    account::Selector selector_;
     std::vector<query_dsl::SearchResult> results_;
     std::string last_error_;
     std::vector<SortKey> sort_keys_;

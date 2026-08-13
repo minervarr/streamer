@@ -22,6 +22,7 @@
 // --library-confirm additionally raises the delete confirmation — the states
 // worth eyeballing that a one-shot capture cannot otherwise reach.
 
+#include "account_pool.hh"
 #include "config.hh"
 #include "fonts.hh"
 #include "library_controller.hh"
@@ -101,7 +102,8 @@ bool captureScreen(Renderer& renderer, const std::string& screen,
         gui::draw_search(canvas, area, searchCtl, queryField, /*queryFocused=*/false,
                          /*typePickerIndex=*/0, /*tableScrollPx=*/0.0f, rowH,
                          /*hoverRow=*/-1, /*hoverHeaderCol=*/-1, /*hoveredAction=*/-1,
-                         ptr, /*dtSeconds=*/0.0f, table, hits);
+                         ptr, /*dtSeconds=*/0.0f, table,
+                         /*countryOptions=*/{}, /*countryPickerIndex=*/0, hits);
     }
 
     renderer.draw(curves, /*overlay_rotation_deg=*/0, images, imagesFg,
@@ -166,7 +168,10 @@ int main(int argc, char** argv) {
 
     config::Config cfg = config::load();
     if (cfg.accounts.empty()) cfg.accounts.push_back({});
-    const config::Account& account = cfg.accounts.front();
+    // Same long-lived pool the real app builds (see gui_main.cc): the
+    // controller picks and fails over per request rather than being bound to
+    // one account for its lifetime.
+    account::Pool accountPool(cfg);
 
     FileAssetReader assets;
     HeadlessSurfaceProvider surface(frame_w, frame_h);
@@ -182,7 +187,7 @@ int main(int argc, char** argv) {
     if (ensure_glyphs(assets, msdf_cache, query))
         upload_msdf(renderer, msdf_cache);
 
-    search::SearchController searchCtl(account);
+    search::SearchController searchCtl(accountPool);
     widgets::TextFieldState queryField;
     queryField.text = query;
     queryField.cursorByte = query.size();

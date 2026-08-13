@@ -9,12 +9,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
+#include <utility>
 
 namespace search {
 
-SearchController::SearchController(const config::Account& account) {
-    auto res = qobuz::make_service(account);
-    if (res.ok()) svc_ = res.take();
+SearchController::SearchController(account::Pool& pool) : pool_(&pool) {}
+
+bool SearchController::has_service() const {
+    return pool_ && !pool_->candidates(account::Selector{}).empty();
 }
 
 namespace {
@@ -94,12 +97,45 @@ std::string NormalizeKind(const std::string& kind) {
 
 } // namespace
 
+// Collapses the same release returned by several accounts into one row whose
+// country lists every region that offered it — "FR, NZ". Without this a
+// `country:all` search shows one duplicate per account, which buries the
+// actual answer the user wanted: *where* can I get this?
+//
+// Order is preserved (first sighting wins its position) so the API's own
+// relevance ranking survives the merge.
+void MergeByIdAcrossCountries(std::vector<query_dsl::SearchResult>& rows) {
+    std::vector<query_dsl::SearchResult> merged;
+    merged.reserve(rows.size());
+    // Keyed on type as well as id: ids are only unique within a kind, so an
+    // album and a track could otherwise collide and swallow each other.
+    std::map<std::pair<std::string, std::string>, size_t> seen;
+
+    for (auto& r : rows) {
+        auto key = std::make_pair(r.type, r.id);
+        auto it = seen.find(key);
+        if (it == seen.end()) {
+            seen.emplace(key, merged.size());
+            merged.push_back(std::move(r));
+            continue;
+        }
+        std::string& countries = merged[it->second].country;
+        if (r.country.empty()) continue;
+        if (countries.find(r.country) == std::string::npos) {
+            if (!countries.empty()) countries += ", ";
+            countries += r.country;
+        }
+    }
+    rows = std::move(merged);
+}
+
+
 bool SearchController::search(const std::string& query_text, const std::string& kind, int limit) {
     last_error_.clear();
     results_.clear();
     clear_selection();
 
-    if (!svc_) {
+    if (!pool_) {
         last_error_ = "No account configured (set app_id/app_secret, then run login).";
         ++revision_;
         return false;
@@ -114,46 +150,90 @@ bool SearchController::search(const std::string& query_text, const std::string& 
         std::string hint = query_dsl::ExtractTypeHint(ast);
         k = hint.empty() ? "all" : NormalizeKind(hint);
     }
+    // NormalizeKind answers "smart" for anything it doesn't recognise, so an
+    // unparseable type: hint can land back here. Searching everything is the
+    // right response to "I don't know what you meant" — and it is what the
+    // old catch-all else branch did before the endpoints became explicit.
+    if (k != "albums" && k != "tracks" && k != "artists" && k != "playlists") k = "all";
+
+    // A `country:` term in the query beats the search bar's picker for this
+    // one search — typing is more specific than a sticky control.
+    account::Selector sel = selector_;
+    const std::string country_hint = query_dsl::ExtractCountryHint(ast);
+    if (!country_hint.empty()) sel = account::Selector::from_country(country_hint);
+
+    const std::vector<int> cands = pool_->candidates(sel);
+    if (cands.empty()) {
+        last_error_ = "No account configured (set app_id/app_secret, then run login).";
+        ++revision_;
+        return false;
+    }
+    const bool fan_out = (sel.mode == account::Selector::All);
 
     bool any_ok = false;
     std::string combined_error;
 
-    auto run_tracks = [&]() {
-        auto res = svc_->search_tracks(base_term, limit, {});
-        if (!res.ok()) { combined_error += res.error().message + " "; return; }
-        any_ok = true;
-        for (auto& t : res.value().items.value_or({}))
-            if (t) results_.push_back(FromTrack(*t));
-    };
-    auto run_albums = [&]() {
-        auto res = svc_->search_albums(base_term, limit, {});
-        if (!res.ok()) { combined_error += res.error().message + " "; return; }
-        any_ok = true;
-        for (auto& a : res.value().items.value_or({}))
-            if (a) results_.push_back(FromAlbum(*a));
-    };
-    auto run_artists = [&]() {
-        auto res = svc_->search_artists(base_term, limit, {});
-        if (!res.ok()) { combined_error += res.error().message + " "; return; }
-        any_ok = true;
-        for (auto& a : res.value().items.value_or({}))
-            if (a) results_.push_back(FromArtist(*a));
-    };
-    auto run_playlists = [&]() {
-        auto res = svc_->search_playlists(base_term, limit, {});
-        if (!res.ok()) { combined_error += res.error().message + " "; return; }
-        any_ok = true;
-        for (auto& p : res.value().items.value_or({}))
-            if (p) results_.push_back(FromPlaylist(*p));
+    // Runs the requested endpoint(s) against one account, tagging every row
+    // with the country that served it. That tag is what makes the results
+    // table's Country column (dead until now — nothing ever filled it in) and
+    // `country:` filtering mean something.
+    auto run_one_account = [&](kb::QobuzApiService& svc, const std::string& country) {
+        bool ok = false;
+        auto take = [&](auto& res, auto&& conv) {
+            if (!res.ok()) { combined_error += res.error().message + " "; return; }
+            ok = true;
+            for (auto& item : res.value().items.value_or({}))
+                if (item) {
+                    auto r = conv(*item);
+                    r.country = country;
+                    results_.push_back(std::move(r));
+                }
+        };
+        if (k == "tracks" || k == "all") {
+            auto res = svc.search_tracks(base_term, limit, {});
+            take(res, [](const kb::Track& t) { return FromTrack(t); });
+        }
+        if (k == "albums" || k == "all") {
+            auto res = svc.search_albums(base_term, limit, {});
+            take(res, [](const kb::Album& a) { return FromAlbum(a); });
+        }
+        if (k == "artists" || k == "all") {
+            auto res = svc.search_artists(base_term, limit, {});
+            take(res, [](const kb::Artist& a) { return FromArtist(a); });
+        }
+        if (k == "playlists" || k == "all") {
+            auto res = svc.search_playlists(base_term, limit, {});
+            take(res, [](const kb::Playlist& p) { return FromPlaylist(p); });
+        }
+        return ok;
     };
 
-    if (k == "tracks") run_tracks();
-    else if (k == "albums") run_albums();
-    else if (k == "artists") run_artists();
-    else if (k == "playlists") run_playlists();
-    else { run_albums(); run_tracks(); run_artists(); run_playlists(); }
+    for (int idx : cands) {
+        auto svc = pool_->acquire(idx);
+        if (!svc.ok()) {
+            account::Failure f = account::classify(svc.error());
+            pool_->record_fail(idx, f, svc.error().message);
+            combined_error += svc.error().message + " ";
+            if (!account::should_failover(f)) break;
+            continue;
+        }
+
+        const std::string country = pool_->config().accounts[idx].country;
+        if (run_one_account(*svc.value(), country)) {
+            any_ok = true;
+            pool_->record_ok(idx);
+        } else {
+            pool_->record_fail(idx, account::Failure::Other, combined_error);
+        }
+
+        // Auto/Country stop at the first account that answers; only `all`
+        // keeps going to collect every region's view of the catalog.
+        if (!fan_out && any_ok) break;
+    }
 
     if (!any_ok) { last_error_ = combined_error; ++revision_; return false; }
+
+    if (fan_out) MergeByIdAcrossCountries(results_);
 
     // Client-side DSL filtering + relevance ranking (query_dsl::Match/Score),
     // same as the Win32 GUI's QueryParser-driven filtering.

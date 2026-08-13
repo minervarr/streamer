@@ -69,6 +69,11 @@ Config load(const fs::path &path) {
                     a.app_secret = (*t)["app_secret" ].value<std::string>().value_or("");
                     a.user_id    = (*t)["user_id"    ].value<std::string>().value_or("");
                     a.auth_token = (*t)["auth_token" ].value<std::string>().value_or("");
+                    // Absent on every config written before failover existed;
+                    // 0/"" is the correct "no history yet" state, not an error.
+                    a.last_ok     = (*t)["last_ok"    ].value<int64_t>().value_or(0);
+                    a.last_fail   = (*t)["last_fail"  ].value<int64_t>().value_or(0);
+                    a.fail_reason = (*t)["fail_reason"].value<std::string>().value_or("");
                     cfg.accounts.push_back(std::move(a));
                 }
             }
@@ -122,6 +127,12 @@ void save(const Config &cfg, const fs::path &path) {
         out << "app_secret = " << toml_str(a.app_secret) << "\n";
         out << "user_id = "    << toml_str(a.user_id)    << "\n";
         out << "auth_token = " << toml_str(a.auth_token) << "\n";
+        // Omitted while still at their defaults so a config the user has
+        // never had a failure on stays as short as it was before.
+        if (a.last_ok)   out << "last_ok = "   << a.last_ok   << "\n";
+        if (a.last_fail) out << "last_fail = " << a.last_fail << "\n";
+        if (!a.fail_reason.empty())
+            out << "fail_reason = " << toml_str(a.fail_reason) << "\n";
         out << "\n";
     }
     out << "[settings]\n";
@@ -153,6 +164,32 @@ void persist_app_credentials(const std::string &app_id, const std::string &app_s
     } catch (const std::exception &e) {
         std::fprintf(stderr, "Warning: could not persist refreshed credentials: %s\n",
                      e.what());
+    }
+}
+
+void persist_account_health(const std::string &country, const std::string &user_id,
+                            int64_t last_ok, int64_t last_fail,
+                            const std::string &fail_reason) {
+    if (country.empty() && user_id.empty()) return;
+
+    static std::mutex mu;
+    std::lock_guard<std::mutex> lock(mu);
+
+    Config cfg = load();
+    for (auto &a : cfg.accounts) {
+        bool match = country.empty() ? (a.user_id == user_id) : (a.country == country);
+        if (!match) continue;
+        a.last_ok     = last_ok;
+        a.last_fail   = last_fail;
+        a.fail_reason = fail_reason;
+        try {
+            save(cfg);
+        } catch (const std::exception &e) {
+            // Health is an optimisation, never correctness — a read-only
+            // config must not take the whole run down with it.
+            std::fprintf(stderr, "Warning: could not persist account health: %s\n", e.what());
+        }
+        return;
     }
 }
 
