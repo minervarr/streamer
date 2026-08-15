@@ -28,7 +28,7 @@ pkgname=('streamer-universal'
          'streamer-v3'
          'streamer-v4'
          'streamer-zen4')
-pkgver=r55.g1a0c462
+pkgver=r69.gdd56f58
 pkgrel=1
 arch=('x86_64')
 url='https://github.com/minervarr/streamer'
@@ -41,12 +41,13 @@ license=('AGPL3')
 # vulkan-icd-loader/wayland/libxkbcommon are needed by the GUI at runtime.
 depends=('curl' 'openssl' 'vulkan-icd-loader' 'wayland' 'libxkbcommon' 'gcc-libs')
 
-# shader-slang-bin: slangc is REQUIRED at build time for the GUI — no .spv is
-#   committed, and VceShaders.cmake falls back to a hardcoded path without it.
+# slangc (shader-slang-git or shader-slang-bin) is REQUIRED at build time for
+#   the GUI — no .spv is committed, and VceShaders.cmake falls back to a
+#   hardcoded path without it.
 # wayland-protocols: wayland-scanner generates the xdg-shell glue from the
 #   system protocol XML at build time.
 # vulkan-headers: Vulkan API headers for the GUI's Vk_Canvas_Lb_LAW backend.
-makedepends=('git' 'cmake' 'ninja' 'shader-slang-bin' 'vulkan-headers'
+makedepends=('git' 'cmake' 'ninja' 'vulkan-headers'
              'wayland-protocols')
 
 options=('!lto')
@@ -73,7 +74,17 @@ _arch_level() {
     esac
 }
 
-_slangc() { command -v slangc || echo /opt/shader-slang-bin/bin/slangc; }
+_slangc() {
+    # slangc lives on PATH, in shader-slang-git's /opt/shader-slang/bin, or in
+    # shader-slang-bin's /opt/shader-slang-bin/bin. Probe in that order.
+    local c
+    for c in "$(command -v slangc || true)" \
+             /opt/shader-slang/bin/slangc \
+             /opt/shader-slang-bin/bin/slangc; do
+        [[ -n "$c" && -x "$c" ]] && { echo "$c"; return 0; }
+    done
+    echo /opt/shader-slang/bin/slangc
+}
 
 pkgver() {
     cd "${srcdir}/streamer"
