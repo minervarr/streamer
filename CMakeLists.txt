@@ -24,8 +24,15 @@ endif()
 # inline and dead-strip across translation units instead of stopping at each
 # object boundary. Read at target-creation time, hence before the targets
 # exist. Costs link time; Release only.
+#
+# Not on Android: check_ipo_supported() probes the linker with a try_compile
+# that cannot be told the ABI (it falls back to armeabi-v7a) and picks gold,
+# which NDK 29 no longer ships LTO support for — so the probe always fails and
+# just prints a scary, meaningless error. The engine already applies -flto=thin
+# per translation unit on Android Release (platform/android/CMakeLists.txt), so
+# nothing real is lost.
 option(STREAMER_LTO "Link-time optimization for Release builds" ON)
-if(STREAMER_LTO)
+if(STREAMER_LTO AND NOT ANDROID)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_why)
     if(_ipo_ok)

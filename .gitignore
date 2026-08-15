@@ -39,6 +39,18 @@ Cargo.lock
 .env
 *.env
 
+# Android / Gradle
+android/.gradle/
+android/**/.gradle/
+android/**/.cxx/
+android/**/.externalNativeBuild/
+android/local.properties
+android/**/local.properties
+.kotlin/
+*.jks
+*.keystore
+*.keystore.orig
+
 # Project-specific
 thirdPartyKnowledge/
 streamer-gui/build/

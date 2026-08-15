@@ -1,3 +1,0 @@
-repository='https://github.com/marzer/tomlplusplus.git'
-module=''
-tag='origin'
