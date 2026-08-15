@@ -28,7 +28,7 @@ pkgname=('streamer-universal'
          'streamer-v3'
          'streamer-v4'
          'streamer-zen4')
-pkgver=r69.gdd56f58
+pkgver=r70.gf5aa1e7
 pkgrel=1
 arch=('x86_64')
 url='https://github.com/minervarr/streamer'
