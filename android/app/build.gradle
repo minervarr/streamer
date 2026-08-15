@@ -41,6 +41,17 @@ android {
         }
     }
 
+    // app_shell's Java half. It is ONE file — AppShellActivity, the off-screen
+    // EditText an input method needs — and it is compiled from the submodule
+    // rather than copied, so there is one copy of it however many apps use it.
+    // StreamerActivity extends it and adds nothing but its System.loadLibrary
+    // block, which cannot live upstream because only this app knows the name.
+    sourceSets {
+        main {
+            java.srcDirs += "../../framework/app_shell/platform/android/java"
+        }
+    }
+
     splits {
         abi {
             enable true

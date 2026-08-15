@@ -11,4 +11,5 @@
 /home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/core/CMakeLists.txt
 /home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/third_party/freetype/CMakeLists.txt
 /home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/third_party/msdfgen/CMakeLists.txt
+/home/nava/Files/code/active/streamer/framework/app_shell/CMakeLists.txt
 /home/nava/Files/code/active/streamer/gui/CMakeLists.txt

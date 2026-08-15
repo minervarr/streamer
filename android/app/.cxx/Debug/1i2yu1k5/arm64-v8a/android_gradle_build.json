@@ -13,6 +13,7 @@
     "/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/core/CMakeLists.txt",
     "/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/third_party/freetype/CMakeLists.txt",
     "/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/third_party/msdfgen/CMakeLists.txt",
+    "/home/nava/Files/code/active/streamer/framework/app_shell/CMakeLists.txt",
     "/home/nava/Files/code/active/streamer/gui/CMakeLists.txt"
   ],
   "cleanCommandsComponents": [
@@ -47,6 +48,18 @@
       "abi": "arm64-v8a",
       "artifactName": "ae_util",
       "output": "/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/kobuzapi_core/archive_engine/util/libae_util.a"
+    },
+    "app_shell::@7b9223da35c159ff2675": {
+      "toolchain": "toolchain",
+      "abi": "arm64-v8a",
+      "artifactName": "app_shell",
+      "output": "/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/app_shell_build/libapp_shell.a"
+    },
+    "app_shell_android::@7b9223da35c159ff2675": {
+      "toolchain": "toolchain",
+      "abi": "arm64-v8a",
+      "artifactName": "app_shell_android",
+      "output": "/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/app_shell_build/libapp_shell_android.a"
     },
     "curl_ext::@5e70c966a075bb9571ed": {
       "toolchain": "toolchain",

@@ -32,6 +32,20 @@ ANDROID_NDK:UNINITIALIZED=/opt/android-sdk/ndk/29.0.14206865
 //No help, variable specified on the command line.
 ANDROID_PLATFORM:UNINITIALIZED=android-26
 
+APP_SHELL_APP_ID:STRING=io.nava.streamer
+
+APP_SHELL_APP_NAME:STRING=streamer
+
+APP_SHELL_NATIVE_APP_GLUE_DIR:PATH=/opt/android-sdk/ndk/29.0.14206865/sources/android/native_app_glue
+
+//Directory name under $HOME for files the app writes. Empty =
+// beside the executable.
+APP_SHELL_STATE_HOME:STRING=
+
+APP_SHELL_WINDOW_TITLE:STRING=streamer
+
+APP_SHELL_WIN_CLASS:STRING=StreamerMain
+
 //Generate dynamic library files instead of static
 BUILD_SHARED_LIBS:BOOL=OFF
 
@@ -305,8 +319,8 @@ CMAKE_SYSTEM_NAME:UNINITIALIZED=Android
 //No help, variable specified on the command line.
 CMAKE_SYSTEM_VERSION:UNINITIALIZED=26
 
-//The CMake toolchain file
-CMAKE_TOOLCHAIN_FILE:FILEPATH=/opt/android-sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake
+//No help, variable specified on the command line.
+CMAKE_TOOLCHAIN_FILE:UNINITIALIZED=/opt/android-sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
@@ -433,6 +447,8 @@ STREAMER_LTO:BOOL=ON
 //Path to the Slang compiler (slangc) from the Vulkan SDK
 VCE_SLANGC:FILEPATH=/opt/shader-slang/bin/slangc
 
+VK_CANVAS_DIR:PATH=/home/nava/Files/code/active/streamer/gui/../framework/Vk_Canvas_Lb_LAW
+
 //Value Computed by CMake
 archive_engine_core_BINARY_DIR:STATIC=/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/arm64-v8a/kobuzapi_core/archive_engine
 
@@ -510,6 +526,8 @@ z-lib:FILEPATH=/opt/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux
 # INTERNAL cache entries
 ########################
 
+//app_shell source root
+APP_SHELL_DIR:INTERNAL=/home/nava/Files/code/active/streamer/framework/app_shell
 //ADVANCED property for variable: CMAKE_ADDR2LINE
 CMAKE_ADDR2LINE-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_AR
@@ -644,7 +662,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_NM
 CMAKE_NM-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=14
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=15
 //ADVANCED property for variable: CMAKE_OBJCOPY
 CMAKE_OBJCOPY-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_OBJDUMP

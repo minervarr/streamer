@@ -1,29 +1,54 @@
-C/C++ Structured Log@
->
-</home/nava/Files/code/active/streamer/android/CMakeLists.txtC
+C/C++ Structured Log8
+6
+4/home/nava/Files/code/active/streamer/CMakeLists.txtC
 A
-?com.android.build.gradle.internal.cxx.io.EncodedFileFingerPrint	—ÖÅáÿ3µ è†˜áÿ3v
+?com.android.build.gradle.internal.cxx.io.EncodedFileFingerPrint	¼í™®€4Çr ¸ì£áÿ3@
+>
+</home/nava/Files/code/active/streamer/android/CMakeLists.txt	¼í™®€4À Ú¼•®€4
+}
+{/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/_deps/tomlplusplus-src/CMakeLists.txt	¼í™®€4 ì»Äáÿ3v
 t
-r/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/additional_project_files.txt	—ÖÅáÿ3ÍÎ úÕÅáÿ3s
+r/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/additional_project_files.txt	¼í™®€4ÍÎ ¬í™®€4s
 q
-o/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/android_gradle_build.json	—ÖÅáÿ3Ð5 ûÕÅáÿ3x
+o/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/android_gradle_build.json	¼í™®€4Ü: ¬í™®€4x
 v
-t/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/android_gradle_build_mini.json	—ÖÅáÿ3Í1 –ÖÅáÿ3e
+t/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/android_gradle_build_mini.json	¼í™®€4Í6 ¹í™®€4e
 c
-a/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/build.ninja	—ÖÅáÿ3óù éÕÅáÿ3i
+a/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/build.ninja	¼í™®€4Òú ™í™®€4i
 g
-e/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/build.ninja.txt	—ÖÅáÿ3n
+e/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/build.ninja.txt	¼í™®€4	n
 l
-j/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/build_file_index.txt	—ÖÅáÿ3à
- —ÖÅáÿ3o
+j/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/build_file_index.txt	¼í™®€4
+© »í™®€4o
 m
-k/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/compile_commands.json	—ÖÅáÿ3	Ý¶ éÕÅáÿ3s
+k/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/compile_commands.json	¼í™®€4Òù ˜í™®€4s
 q
-o/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/compile_commands.json.bin	—ÖÅáÿ3
-Åë éÕÅáÿ3y
+o/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/compile_commands.json.bin	¼í™®€4È€ ˜í™®€4y
 w
-u/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/metadata_generation_command.txt	—ÖÅáÿ3¢ —ÖÅáÿ3l
+u/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/metadata_generation_command.txt	¼í™®€4¢ —ÖÅáÿ3l
 j
-h/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/prefab_config.json	—ÖÅáÿ3( —ÖÅáÿ3q
+h/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/prefab_config.json	¼í™®€4( —ÖÅáÿ3q
 o
-m/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/symbol_folder_index.txt	—ÖÅáÿ3l —ÖÅáÿ3
+m/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/symbol_folder_index.txt	¼í™®€4l —ÖÅáÿ3T
+R
+P/home/nava/Files/code/active/streamer/first_party/KawusapiCC/core/CMakeLists.txt	¼í™®€4  Š·¿Âÿ3j
+h
+f/home/nava/Files/code/active/streamer/first_party/KawusapiCC/engine/archive_engine/core/CMakeLists.txt	¼í™®€4° ü¾¿Âÿ3n
+l
+j/home/nava/Files/code/active/streamer/first_party/KawusapiCC/engine/archive_engine/core/net/CMakeLists.txt	¼í™®€4«1 ý¾¿Âÿ3n
+l
+j/home/nava/Files/code/active/streamer/first_party/KawusapiCC/engine/archive_engine/core/tag/CMakeLists.txt	¼í™®€4Ã ý¾¿Âÿ3o
+m
+k/home/nava/Files/code/active/streamer/first_party/KawusapiCC/engine/archive_engine/core/util/CMakeLists.txt	¼í™®€4Þ ý¾¿Âÿ3X
+V
+T/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/core/CMakeLists.txt	¼í™®€4î „¿¿Âÿ3s
+q
+o/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/img_decode_kit/core/CMakeLists.txt	¼í™®€4¥ ‡¿¿Âÿ3w
+u
+s/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/core/CMakeLists.txt	¼í™®€4©1 ƒË¿Âÿ3‰
+†
+ƒ/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/third_party/freetype/CMakeLists.txt	¼í™®€4Ú¾ Ë›ÀÂÿ3ˆ
+…
+‚/home/nava/Files/code/active/streamer/framework/Vk_Canvas_Lb_LAW/first_party/vulkan_font_engine/third_party/msdfgen/CMakeLists.txt	¼í™®€4„y À§ÀÂÿ3<
+:
+8/home/nava/Files/code/active/streamer/gui/CMakeLists.txt	¼í™®€4„s ·™®€4

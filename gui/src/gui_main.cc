@@ -1245,11 +1245,21 @@ int StreamerApp::run(const Options& opts) {
         // hover, table row hover, the ghost popup's hover timer) never
         // updated without an unrelated click first forcing a redraw. Treat a
         // moved pointer as its own reason to redraw.
-        bool pointerMoved = input.pointerX != lastPointerX || input.pointerY != lastPointerY;
         lastPointerX = input.pointerX; lastPointerY = input.pointerY;
-        bool interacted = input.pointerWentDown || input.wheelDelta != 0.0f ||
-                          !input.typedCodepoints.empty() || !input.keysWentDown.empty() ||
-                          pointerMoved;
+        // inputArrived(), not a list of the FrameInput fields that might have
+        // changed. That list used to name pointerWentDown, wheelDelta,
+        // typedCodepoints, keysWentDown and a moved pointer — five things,
+        // complete-looking, and it MISSED TYPING ENTIRELY on a phone: an input
+        // method produces no typed codepoints, it rewrites the whole buffer
+        // (FrameInput::textEdited). The screen only caught up when the user
+        // happened to tap something.
+        //
+        // The bug is not the missing sixth entry; it is that there was a list.
+        // Forgetting to extend it is not a compile error, so the next kind of
+        // input would have broken the same way. FrameInputView answers this
+        // itself now — every callback it has marks it — so a callback added
+        // later is covered by having been written.
+        bool interacted = inputArrived();
         if (!dirty && !interacted && !first_frame) continue;
         first_frame = false;
 

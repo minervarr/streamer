@@ -118,6 +118,12 @@ if(ANDROID)
     # ships as source with the NDK, not as a prebuilt library.
     set(NATIVE_APP_GLUE ${ANDROID_NDK}/sources/android/native_app_glue)
     set(_gui_host_sources
+        # android_main() — the entry point NativeActivity starts. It is
+        # streamer's rather than app_shell's because the android_app* it is
+        # handed is the ingredient AndroidHost needs, and because everything
+        # else it does (where the library goes, the CA bundle, the language)
+        # is application knowledge.
+        src/os/android_main.cc
         ${VK_CANVAS_ROOT}/platform/android/android_platform.cc
         ${NATIVE_APP_GLUE}/android_native_app_glue.c
     )
@@ -169,6 +175,10 @@ endif()
 add_dependencies(streamer_gui gui_shared_shaders gui_shaders)
 
 target_link_libraries(streamer_gui PRIVATE vk_canvas_core streamer_core app_shell)
+
+# src/ on the include path, not just implicitly via each file's own directory:
+# src/os/android_main.cc includes streamer_app.hh, which is a directory up.
+target_include_directories(streamer_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # app_shell's ui_metrics.cc includes the header generated below, so it has to
 # wait for it. Stated here and not in app_shell's own CMakeLists because the
