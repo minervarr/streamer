@@ -2,11 +2,17 @@
 
 namespace qobuz {
 
+// Written once at startup, read-only afterwards; see the header.
+static std::string g_ca_bundle_path;
+
+void set_ca_bundle_path(const std::string &path) { g_ca_bundle_path = path; }
+
 kb::Result<kb::QobuzApiService> make_service(const config::Account &account,
                                              bool authenticate) {
     kb::QobuzApiService::Config cfg;
-    cfg.app_id     = account.app_id;
-    cfg.app_secret = account.app_secret;
+    cfg.app_id        = account.app_id;
+    cfg.app_secret    = account.app_secret;
+    cfg.ca_bundle_path = g_ca_bundle_path;
 
     auto res = kb::QobuzApiService::with_credentials(cfg);
     if (!res.ok()) return res.error();

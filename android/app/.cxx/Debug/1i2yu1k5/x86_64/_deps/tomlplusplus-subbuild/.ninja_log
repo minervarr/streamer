@@ -1,0 +1,21 @@
+# ninja log v5
+0	8	1786642147869939674	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-mkdir	fe6358edf1c46da9
+0	8	1786642147869939674	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-mkdir	fe6358edf1c46da9
+8	95308	1786642243169280381	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-download	d86831bb4706aa3b
+8	95308	1786642243169280381	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-download	d86831bb4706aa3b
+95308	95313	0	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-update	62d3e80024044d11
+95308	95313	0	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-update	62d3e80024044d11
+95313	95315	1786642243176280479	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-patch	5694123927fb6e60
+95313	95315	1786642243176280479	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-patch	5694123927fb6e60
+95315	95317	1786642243178280507	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-configure	7370adcd0f53f118
+95315	95317	1786642243178280507	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-configure	7370adcd0f53f118
+95317	95319	1786642243180280535	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-build	d5b1981e6a7b0dca
+95317	95319	1786642243180280535	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-build	d5b1981e6a7b0dca
+95319	95322	1786642243183280577	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-install	1f11406e6842af0b
+95319	95322	1786642243183280577	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-install	1f11406e6842af0b
+95322	95324	1786642243185280605	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-test	bb12fa4f0e4d1d4a
+95322	95324	1786642243185280605	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-test	bb12fa4f0e4d1d4a
+95324	95327	1786642243188280647	CMakeFiles/tomlplusplus-populate-complete	c654496db7677a65
+95324	95327	1786642243188280647	tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-done	c654496db7677a65
+95324	95327	1786642243188280647	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/CMakeFiles/tomlplusplus-populate-complete	c654496db7677a65
+95324	95327	1786642243188280647	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/_deps/tomlplusplus-subbuild/tomlplusplus-populate-prefix/src/tomlplusplus-populate-stamp/tomlplusplus-populate-done	c654496db7677a65

@@ -186,7 +186,15 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
 
     // ── Results table ────────────────────────────────────────────────────────
     float bottomBarH = rowH * 1.2f;
-    Rect tableArea = {area.x, y, area.w, (area.y + area.h) - y - bottomBarH - pad};
+    // The table gets whatever is left after the controls above it and the
+    // download bar below — which can be nothing at all, and used to go
+    // NEGATIVE: landscape on a phone with the keyboard open leaves ~250px of
+    // content area, and a negative height put the bottom bar *above* where it
+    // started, drawn straight over the region picker. Zero rows is a cramped
+    // screen; a bar stacked backwards through the controls is a broken one.
+    float tableH = (area.y + area.h) - y - bottomBarH - pad;
+    if (tableH < 0.0f) tableH = 0.0f;
+    Rect tableArea = {area.x, y, area.w, tableH};
     auto cols = searchTableColumns();
     widgets::TableStyle tstyle;
     tstyle.headerBg = theme::kPanel; tstyle.headerText = theme::kText;
@@ -390,10 +398,12 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
         }
     }
 
-    y = tableArea.y + tableArea.h + pad;
-
     // ── Bottom bar: selection count + download button ──────────────────────
-    Rect dlRect = {area.x, y, area.w * 0.2f, bottomBarH};
+    // Anchored to the bottom of the area, not to wherever the table happened
+    // to end. They are the same place whenever the table has room; when it
+    // does not — landscape on a phone with the keyboard up — following the
+    // table put this button on top of the column headers.
+    Rect dlRect = {area.x, area.y + area.h - bottomBarH, area.w * 0.2f, bottomBarH};
     bool dlDisabled = ctl.selected().empty();
     theme::button(c, dlRect.x, dlRect.y, dlRect.w, dlRect.h,
                  "Download (" + std::to_string(ctl.selected().size()) + ")",
@@ -426,19 +436,25 @@ std::string accountLabel(const config::Account& a, int idx) {
 
 } // namespace
 
-void draw_settings(Canvas& c, const Rect& area, const settings::SettingsController& ctl,
-                   const widgets::TextFieldState fields[FieldCount], int focusedField,
-                   int accountListHover, int hoveredAction, bool pointerDown, float rowH,
-                   std::vector<Hit>& hits) {
+float draw_settings(Canvas& c, const Rect& area, const settings::SettingsController& ctl,
+                    const widgets::TextFieldState fields[FieldCount], int focusedField,
+                    int accountListHover, int hoveredAction, bool pointerDown, float rowH,
+                    float scrollPx, std::vector<Hit>& hits) {
     float pad = rowH * 0.3f;
-    float y = area.y;
-    float halfW = area.w * 0.48f;
-    Rect leftCol = {area.x, y, halfW, area.h};
-    Rect rightCol = {area.x + area.w - halfW, y, halfW, area.h};
+    c.setClip(area.x, area.y, area.w, area.h);
+    float y = area.y - scrollPx;
+    // Two columns side by side need width for two columns. Upright on a
+    // phone there is barely enough for one — the halves collided, and text
+    // fields ended up narrower than the labels sitting next to them — so the
+    // second column goes underneath instead. Same content, same order, and
+    // on any landscape window nothing changes at all.
+    bool narrow = area.w < area.h;
+    float colW = narrow ? area.w : area.w * 0.48f;
+    Rect leftCol = {area.x, y, colW, area.h};
+    float ly = leftCol.y;
 
     // ── Left column: accounts ────────────────────────────────────────────────
     {
-        float ly = leftCol.y;
         widgets::drawGroupHeader(c, {leftCol.x, ly, leftCol.w, rowH}, "Accounts", theme::kText);
         ly += rowH * 1.1f;
 
@@ -498,11 +514,20 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
                      rowH * 0.2f);
         hits.push_back({expRect, ActExportAccounts});
         hits.push_back({impRect, ActImportAccounts});
+        // The form rows advance a local `row`, not `ly`; hand the real bottom
+        // of this column back, or the stacked layout below starts on top of
+        // it.
+        ly = row.y + rowH;
     }
 
+    // Stacked, this starts where the accounts column actually ended — which
+    // is only known now, after drawing it.
+    Rect rightCol = narrow ? Rect{area.x, ly + pad * 2.0f, colW, area.h}
+                           : Rect{area.x + area.w - colW, y, colW, area.h};
+
     // ── Right column: global settings ───────────────────────────────────────
+    float ry = rightCol.y;
     {
-        float ry = rightCol.y;
         widgets::drawGroupHeader(c, {rightCol.x, ry, rightCol.w, rowH}, "Global Settings", theme::kText);
         ry += rowH * 1.1f;
 
@@ -595,7 +620,13 @@ void draw_settings(Canvas& c, const Rect& area, const settings::SettingsControll
         std::string status = ctl.backup_status();
         if (!status.empty())
             c.text(status, rightCol.x, ry, rowH * 0.3f, theme::kDim);
+        ry += rowH;
     }
+
+    c.clearClip();
+    // Measured from the unscrolled top, so the answer does not depend on
+    // where the caller happens to have scrolled to.
+    return std::max(ly, ry) - (area.y - scrollPx);
 }
 
 } // namespace gui

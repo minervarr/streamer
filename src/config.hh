@@ -37,6 +37,18 @@ struct Config {
     Settings settings;
 };
 
+// Where config.toml lives, and where downloads go when config.toml has no
+// opinion. Both are normally answered by the environment (APPDATA on Windows,
+// XDG_CONFIG_HOME/HOME elsewhere). Android sets neither, and its working
+// directory is "/", which is not writable — so on that platform the values
+// come down from Java (getFilesDir(), getExternalStorageDirectory()) through
+// this, before anything reads or writes a file.
+//
+// Call once, at startup, before any other thread exists. Empty paths mean
+// "ask the environment", which is what every desktop build does.
+void set_platform_dirs(const std::filesystem::path &config_dir,
+                       const std::filesystem::path &download_dir);
+
 std::filesystem::path config_path();
 Config load();
 void   save(const Config &cfg);

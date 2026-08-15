@@ -63,6 +63,13 @@ public:
     // changes). Safe to call with no live textures.
     void clear();
 
+    // Point at a different Renderer after the previous one was destroyed
+    // (Android surface loss). Deliberately NOT clear() + reassign: the old
+    // textures died with their device, so destroying them — through either
+    // Renderer — is a use-after-free. The handles are dropped, not freed, and
+    // the covers reload on demand against the new one.
+    void rebind(Renderer* renderer);
+
     size_t budget = 64;          // max live textures
     int loadsPerFrame = 4;       // max decodes per frame
 

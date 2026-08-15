@@ -1,0 +1,11 @@
+prefix=/home/nava/Files/code/active/streamer/android/app/.cxx/RelWithDebInfo/c6e662bo/x86_64/kobuzapi_core/archive_engine/tag/taglib-install
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: TagLib
+Description: Audio meta-data library
+Requires:
+Version: 2.0.2
+Libs: -L${libdir} -ltag -lz
+Cflags: -I${includedir} -I${includedir}/taglib

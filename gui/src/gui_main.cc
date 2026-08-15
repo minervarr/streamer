@@ -1,5 +1,9 @@
 // streamer GUI — portable skeleton. Owns the dirty-flag frame loop; the
-// per-OS AppHost (host.hh, os/wayland_host.cc today) owns windows/input pump.
+// window, the pump, the input and the paths come from app_shell
+// (framework/app_shell), shared with Matrix Player. StreamerApp
+// (streamer_app.hh) is this app's end of that seam: it implements app_shell's
+// AppView through FrameInputView, so everything below still reads a FrameInput
+// exactly as it did when streamer carried its own host layer.
 //
 // Search screen is the default mode: query text field -> SearchController,
 // sortable results table, cheatsheet panel, in-process download dispatch.
@@ -12,13 +16,13 @@
 #include "config.hh"
 #include "download.hh"
 #include "fonts.hh"
-#include "host.hh"
 #include "library.hh"
 #include "library_controller.hh"
 #include "library_view.hh"
 #include "query_dsl.hh"
 #include "search_controller.hh"
 #include "service_factory.hh"
+#include "streamer_app.hh"
 #include "theme.hh"
 #include "views.hh"
 
@@ -624,6 +628,65 @@ int run_selftest() {
              "a query with no country: term routes by the picker instead");
     }
 
+    // Input-method text entry (Android). An IME does not type characters, it
+    // rewrites the pending run: composing 가 goes ㄱ -> 가, and the second state
+    // is not the first plus something. These assert that a whole-buffer report
+    // replaces the field rather than appending to it — the bug this seam exists
+    // to prevent is a search box reading "ㄱ가" after one keystroke.
+    {
+        widgets::TextFieldState field;
+        FrameInput imeInput;
+
+        imeInput.beginFrame();
+        imeInput.onTextEdit(TextEditEvent{"\xE3\x84\xB1", 3});           // ㄱ
+        check(widgets::textFieldHandleInput(field, imeInput, nullptr),
+             "an input method's first composing state enters the field");
+        check(field.text == "\xE3\x84\xB1", "the field holds exactly what the IME reported");
+
+        imeInput.beginFrame();
+        imeInput.onTextEdit(TextEditEvent{"\xEA\xB0\x80", 3});           // 가
+        check(widgets::textFieldHandleInput(field, imeInput, nullptr),
+             "the next composing state is applied");
+        check(field.text == "\xEA\xB0\x80",
+             "composing REPLACES the pending run (가), it does not append to it (ㄱ가)");
+        check(field.cursorByte == 3 && field.selectionAnchor == field.cursorByte,
+             "the caret follows the IME and no selection is left behind");
+
+        // Deletion arrives the same way — a soft keyboard's backspace reaches us
+        // as a shorter buffer, never as a Backspace keycode.
+        imeInput.beginFrame();
+        imeInput.onTextEdit(TextEditEvent{"", 0});
+        check(widgets::textFieldHandleInput(field, imeInput, nullptr) && field.text.empty(),
+             "clearing via the IME empties the field with no Backspace keycode involved");
+
+        // Idempotence: an IME re-reports unchanged text often (caret moves,
+        // focus churn). Reporting `changed` there would repaint every frame.
+        imeInput.beginFrame();
+        imeInput.onTextEdit(TextEditEvent{"", 0});
+        check(!widgets::textFieldHandleInput(field, imeInput, nullptr),
+             "re-reporting identical text is not a change");
+
+        // The delta path must be inert while an IME owns the buffer, or every
+        // keystroke lands twice on a device with a hardware keyboard attached.
+        field.text = "abc"; field.cursorByte = 3; field.selectionAnchor = 3;
+        imeInput.beginFrame();
+        imeInput.onChar(CharEvent{'d'});
+        imeInput.onTextEdit(TextEditEvent{"abcd", 4});
+        widgets::textFieldHandleInput(field, imeInput, nullptr);
+        check(field.text == "abcd",
+             "typedCodepoints is ignored when the IME reported the buffer (no double insert)");
+
+        // Desktop must be untouched: nothing emits TextEditEvent there, so the
+        // ordinary typing path has to behave exactly as it did before.
+        widgets::TextFieldState desktop;
+        FrameInput plain;
+        plain.beginFrame();
+        plain.onChar(CharEvent{'h'});
+        plain.onChar(CharEvent{'i'});
+        check(widgets::textFieldHandleInput(desktop, plain, nullptr) && desktop.text == "hi",
+             "with no IME the normal typing path is unchanged");
+    }
+
     // Which face serves which script, off the real fonts. No GPU and no
     // window: RasterFont bakes on the CPU, so the metrics that decide whether
     // Russian looks spread out are checkable here rather than by eye.
@@ -678,10 +741,32 @@ std::string previewCell(int row, int col) {
 // started while the first account's token is dead still lands, on whichever
 // account can actually serve it. The pool outlives every worker (it lives for
 // the whole of main), and Pool's own locking makes the shared access safe.
+// Everything the download worker has to say, and — until now — the only
+// channel it had to say it on was stdout. A GUI started from a desktop icon
+// has no console attached and an Android app has nowhere to attach one, so
+// this is what the frame loop reads to draw the progress strip.
+struct DownloadUi {
+    mutable std::mutex m;
+    dl::Progress p;
+    bool active = false;
+    int queueDone = 0, queueTotal = 0;  // position within a multi-album batch
+    std::string note;                   // the last thing that went wrong
+};
+DownloadUi g_dl;
+
 void download_async(account::Pool* pool, const account::Selector& sel,
                     std::string quality, std::string download_dir,
                     int concurrency, std::vector<std::string> ids) {
     if (concurrency < 1) concurrency = 1;
+    {
+        std::lock_guard<std::mutex> lk(g_dl.m);
+        g_dl.active     = true;
+        g_dl.queueDone  = 0;
+        g_dl.queueTotal = (int)ids.size();
+        g_dl.note.clear();
+        g_dl.p = dl::Progress{};
+        g_dl.p.label = "Starting ...";
+    }
     std::thread([pool, sel, quality, download_dir, concurrency, ids]() {
         for (int idx : pool->candidates(sel)) {
             auto svc = pool->acquire(idx);
@@ -689,7 +774,15 @@ void download_async(account::Pool* pool, const account::Selector& sel,
                 account::Failure f = account::classify(svc.error());
                 pool->record_fail(idx, f, svc.error().message);
                 std::fprintf(stderr, "[download] %s\n", svc.error().message.c_str());
-                if (!account::should_failover(f)) return;
+                {
+                    std::lock_guard<std::mutex> lk(g_dl.m);
+                    g_dl.note = svc.error().message;
+                }
+                if (!account::should_failover(f)) {
+                    std::lock_guard<std::mutex> lk(g_dl.m);
+                    g_dl.active = false;
+                    return;
+                }
                 continue;
             }
             pool->record_ok(idx);
@@ -702,45 +795,85 @@ void download_async(account::Pool* pool, const account::Selector& sel,
                                   concurrency, true, true);
                 std::fprintf(stderr, "[download] %s (%s): %s\n", id.c_str(),
                              country.c_str(), ok ? "done" : "failed");
+                std::lock_guard<std::mutex> lk(g_dl.m);
+                ++g_dl.queueDone;
+                if (!ok) g_dl.note = "Failed: " + id;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_dl.m);
+                g_dl.active = false;
             }
             return;
         }
         std::fprintf(stderr, "[download] no account could authenticate\n");
+        {
+            std::lock_guard<std::mutex> lk(g_dl.m);
+            g_dl.active = false;
+            g_dl.note = "No account could authenticate";
+        }
     }).detach();
 }
 
 } // namespace
 
-int main(int argc, char** argv) {
-    bool theme_preview = false;
-    bool widget_preview = false;
-    bool demo = false;
-    bool start_settings = false;
-    const char* capture_path = nullptr;
+// ── Entry ───────────────────────────────────────────────────────────────────
+//
+// app_shell owns main()/WinMain() (os/wayland_host.cc, os/win32_host.cc) and
+// calls this; on Android it owns android_main() and streamer's own six-line
+// android_main.cc calls it. Either way the bootstrap — the log file, the crash
+// handler, the window — has already happened by the time this runs, and what
+// is left is the application's: parse the flags, build the app, loop.
+//
+// argc is 0 on Android: an app started by an Intent has no command line, so
+// every flag here is desktop-only by construction. That is correct — they are
+// development tooling.
+int app_shell_main(int argc, char** argv) {
+    StreamerApp::Options opts;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) return run_selftest();
-        if (std::strcmp(argv[i], "--theme-preview") == 0) theme_preview = true;
-        if (std::strcmp(argv[i], "--widget-preview") == 0) widget_preview = true;
-        if (std::strcmp(argv[i], "--demo") == 0) demo = true;
-        if (std::strcmp(argv[i], "--settings") == 0) start_settings = true;
-        if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) capture_path = argv[++i];
+        if (std::strcmp(argv[i], "--theme-preview") == 0) opts.themePreview = true;
+        if (std::strcmp(argv[i], "--widget-preview") == 0) opts.widgetPreview = true;
+        if (std::strcmp(argv[i], "--demo") == 0) opts.demo = true;
+        if (std::strcmp(argv[i], "--settings") == 0) opts.startSettings = true;
+        if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) opts.capturePath = argv[++i];
     }
 
-    auto host = gui::make_host();
-    if (!host || !host->init()) {
-        std::fprintf(stderr, "[x] failed to initialize GUI host\n");
+    StreamerApp app;
+    // On Android the host is INJECTED rather than manufactured: an AndroidHost
+    // needs the android_app* that only android_main() is ever handed, so
+    // make_host() there returns null by design. g_injected_host is what
+    // android_main.cc leaves for us.
+    std::unique_ptr<Host> owned;
+    Host* host = g_injected_host;
+    if (!host) {
+        owned = make_host();
+        host = owned.get();
+    }
+    if (!host || !host->init(&app)) {
+        std::fprintf(stderr, "[x] failed to initialize the GUI host\n");
         return 1;
     }
+    if (!app.create(host)) return 1;
+    host->showWindow();
+    return app.run(opts);
+}
+
+int StreamerApp::run(const Options& opts) {
+    const bool theme_preview  = opts.themePreview;
+    const bool widget_preview = opts.widgetPreview;
+    const bool demo           = opts.demo;
+    const bool start_settings = opts.startSettings;
+    const char* capture_path  = opts.capturePath;
 
     // Bridges textFieldHandleInput's platform-agnostic widgets::ClipboardIo
     // seam to this host's native clipboard, so core/ never links against
     // Wayland/Win32 directly.
     struct HostClipboardIo : widgets::ClipboardIo {
-        gui::AppHost* host;
-        explicit HostClipboardIo(gui::AppHost* h) : host(h) {}
-        void setText(const std::string& utf8) override { host->set_clipboard_text(utf8); }
-        std::string getText() override { return host->get_clipboard_text(); }
-    } clipboardIo(host.get());
+        Host* host;
+        explicit HostClipboardIo(Host* h) : host(h) {}
+        void setText(const std::string& utf8) override { host->setClipboardText(utf8); }
+        std::string getText() override { return host->getClipboardText(); }
+    } clipboardIo(host_);
 
     config::Config cfg = config::load();
     if (cfg.accounts.empty()) cfg.accounts.push_back({});
@@ -753,7 +886,7 @@ int main(int argc, char** argv) {
     kb::api::set_requests_per_minute(cfg.settings.requests_per_minute);
 
     std::string stale_msdf_cache = (config::config_path().parent_path() / "msdf.cache").string();
-    init_fonts(host->assets(), stale_msdf_cache);
+    init_fonts(host_->assetReader(), stale_msdf_cache);
 
     // The sizes text is actually drawn at. Cells are per-size, and the type
     // scale is a fraction of window height (theme::TypeScale), so this moves
@@ -775,10 +908,16 @@ int main(int argc, char** argv) {
     // before it can be drawn, so anything the user types or the API hands back
     // gets scanned through here.
     auto ensureGlyphsFor = [&](const std::string& utf8) {
-        refresh_glyphs(host->renderer(), glyphSizesFor((float)host->renderer().height()),
+        refresh_glyphs(renderer(), glyphSizesFor((float)renderer().height()),
                        {utf8});
     };
-    ensureGlyphsFor(std::string());
+    // No eager bake here. Every call above needs renderer(), and on
+    // Android there is no surface yet at this point in startup — the window
+    // arrives later, with APP_CMD_INIT_WINDOW — so asking for one segfaults
+    // on a null Renderer before a single frame is drawn. Nothing is lost:
+    // the frame loop calls refresh_glyphs() with the eager charset before it
+    // emits any quad, so the first frame bakes exactly what this line did,
+    // against a Renderer that exists.
 
     search::SearchController searchCtl(accountPool);
 
@@ -814,9 +953,35 @@ int main(int argc, char** argv) {
     widgets::TextFieldState settingsFields[gui::FieldCount];
     settingsFields[gui::FieldDownloadDir].text = settingsCtl.config().settings.download_dir.string();
     int focusedField = -1;
+    // Which text field the on-screen keyboard is attached to, and which one it
+    // was attached to last frame. Both null on desktop, where there is no
+    // on-screen keyboard and every field is typed into directly.
+    widgets::TextFieldState* imeField = nullptr;
+    widgets::TextFieldState* keyboardBoundField = nullptr;
     int loadedAccountIdx = -1;
     int accountListHover = -1;
     gui::TableInteraction tableInteraction;
+
+    // SettingsController edits its own copy of the config; the account pool
+    // borrows `cfg`. Anything that changes the account list has to make the
+    // two agree again, or searches and downloads keep using the accounts as
+    // they were at startup — which looks, from the outside, exactly like an
+    // import that did nothing.
+    auto syncAccounts = [&] {
+        cfg = settingsCtl.config();
+        if (cfg.accounts.empty()) cfg.accounts.push_back({});
+        kb::api::set_requests_per_minute(cfg.settings.requests_per_minute);
+        // Drops the cached services too: they still carry the credentials
+        // they logged in with, so a repaired or replaced token would
+        // otherwise only take effect after a restart.
+        accountPool.reload();
+        rebuildCountryOptions();
+        loadedAccountIdx = -1;  // refill the edit form from the new list
+        // A restore also brings the old machine's download directory with it,
+        // and the field is filled once at startup, so it would otherwise keep
+        // showing a path nothing is being written to.
+        settingsFields[gui::FieldDownloadDir].text = cfg.settings.download_dir.string();
+    };
 
     // Re-checks the current results against library.db for the active
     // quality setting — called after every search and after a quality
@@ -843,16 +1008,24 @@ int main(int argc, char** argv) {
             scan.push_back(r.label);
             scan.push_back(r.genre);
         }
-        refresh_glyphs(host->renderer(),
-                       glyphSizesFor((float)host->renderer().height()), scan);
+        refresh_glyphs(renderer(),
+                       glyphSizesFor((float)renderer().height()), scan);
     };
 
     // The library manager: the catalog under the configured download dir,
     // its cover textures, and the grid's scroll offset. Loaded lazily — the
     // first visit to the screen pays for the query, not every startup.
     libmgr::LibraryController libraryCtl(settingsCtl.config().settings.download_dir.string());
-    gui::CoverCache coverCache(&host->renderer());
+    // Bound to a Renderer by the frame loop, not here: on Android there is no
+    // surface yet at this point (it arrives with APP_CMD_INIT_WINDOW), and the
+    // one that eventually arrives can be replaced later.
+    gui::CoverCache coverCache(nullptr);
     float libraryScrollPx = 0.0f;
+    // Settings scrolls only when it has to (stacked on a narrow screen); on a
+    // desktop window the content fits and the clamp below pins this at 0.
+    float settingsScrollPx = 0.0f;
+    float settingsContentH = 0.0f;   // reported by the last draw_settings
+    float lastSettingsAreaH = 0.0f;  // and the height it had to fit into
     bool libraryLoaded = false;
 
     enum class Screen { Search, Settings, Library };
@@ -861,8 +1034,14 @@ int main(int argc, char** argv) {
 
     // Everything that invalidates the on-screen library: entering the screen,
     // a delete, or the download directory changing under it.
+    // A capture may be pointed at a fixture tree. Kept as an override here
+    // rather than written into the config, so a screenshot run never edits
+    // config.toml behind the user's back.
+    const std::string& captureLibraryRoot = opts.captureLibraryRoot;
     auto reloadLibrary = [&] {
-        libraryCtl.set_root(settingsCtl.config().settings.download_dir.string());
+        libraryCtl.set_root(captureLibraryRoot.empty()
+                                ? settingsCtl.config().settings.download_dir.string()
+                                : captureLibraryRoot);
         libraryCtl.reload();
         coverCache.clear();
         libraryScrollPx = 0.0f;
@@ -873,9 +1052,32 @@ int main(int argc, char** argv) {
             scan.push_back(a.title);
             scan.push_back(a.artist_name);
         }
-        refresh_glyphs(host->renderer(),
-                       glyphSizesFor((float)host->renderer().height()), scan);
+        refresh_glyphs(renderer(),
+                       glyphSizesFor((float)renderer().height()), scan);
     };
+
+    // ── Capture mode ────────────────────────────────────────────────────────
+    //
+    // streamer_gui_capture asks for a list of screens; the loop below draws
+    // each one, hands it back through opts.onCaptured and moves on. Nothing
+    // here reimplements a layout — this IS the layout, which is the whole
+    // reason the tool was rebuilt this way.
+    const bool capturing = !opts.captureScreens.empty();
+    size_t captureIdx = 0;
+    auto applyCaptureScreen = [&](const std::string& name) {
+        if (name == "settings")     activeScreen = Screen::Settings;
+        else if (name == "library") activeScreen = Screen::Library;
+        else                        activeScreen = Screen::Search;
+    };
+    if (capturing) {
+        if (!opts.captureQuery.empty()) {
+            queryField.text = opts.captureQuery;
+            queryField.cursorByte = queryField.text.size();
+            searchCtl.search(queryField.text, "smart");
+        }
+        settingsScrollPx = opts.settingsScroll;
+        applyCaptureScreen(opts.captureScreens[0]);
+    }
 
     if (demo) {
         // Dev tooling only (visual verification, not shipped functionality):
@@ -893,14 +1095,44 @@ int main(int argc, char** argv) {
         refreshDownloaded();
     }
 
-    FrameInput input;
+    // Route the download meter here instead of to a terminal nobody is
+    // looking at. Installed once, for the life of the process; the sink runs
+    // on the download worker threads, so it does nothing but store.
+    dl::set_progress_sink([this](const dl::Progress& p) {
+        {
+            std::lock_guard<std::mutex> lk(g_dl.m);
+            if (!p.error.empty()) {
+                // A failure ends the attempt as far as the user is concerned.
+                // It has to replace the meter, not sit behind it: a bar frozen
+                // at 0% says "slow", and 401 does not mean slow.
+                g_dl.note   = p.error;
+                g_dl.active = false;
+            } else {
+                g_dl.p = p;
+            }
+        }
+        // Outside the lock, and the reason the frame loop can sleep: this runs
+        // on a download worker, which cannot draw and must not block. Waking
+        // the UI thread is safe from any thread by contract, and the three
+        // integers are ignored on the way back — StreamerApp::onAppEvent only
+        // marks the frame dirty. Without this the strip would sit still until
+        // the user happened to move the pointer.
+        if (host_) host_->postAppEvent(0);
+    });
+
+    // An alias, not an object: the FrameInput belongs to FrameInputView, which
+    // is what the host's callbacks pour into. Binding a reference here is what
+    // lets every `input.` below — and every widget it is handed to — stay
+    // exactly as it was written against streamer's own host layer.
+    FrameInput& input = FrameInputView::input();
     bool first_frame = true;
     std::vector<gui::Hit> hits;  // filled by the PREVIOUS frame's draw
     auto lastFrameTime = std::chrono::steady_clock::now();
     float lastPointerX = 0.0f, lastPointerY = 0.0f;
+    Renderer* boundRenderer = nullptr;   // what coverCache/the atlas are bound to
 
-    while (!host->quit_requested()) {
-        input.beginFrame();
+    while (running() && !host_->quitRequested()) {
+        beginFrame();
         // Glyphs the last frame asked for and did not have are a reason to
         // redraw as much as a click is, and a reason not to sit in the event
         // wait first: this loop is event-driven, so without both of these a
@@ -909,9 +1141,54 @@ int main(int argc, char** argv) {
         // a glyph changes the advances after it, hence new subpixel phases),
         // and back-to-back frames make that imperceptible.
         bool glyphsPending = g_text_ok && g_text.hasMisses();
-        host->pump(/*timeout_ms=*/glyphsPending ? 0 : 1000, input);
+        // A download reports from another thread and cannot wake this one, so
+        // while one is running the loop stops waiting a full second for an
+        // input event it will not get — otherwise the percentage would step
+        // once a second and read as a hang rather than as progress.
+        dl::Progress dlp;
+        bool dlActive = false, dlDone = false;
+        int dlQueueDone = 0, dlQueueTotal = 0;
+        std::string dlNote;
+        {
+            std::lock_guard<std::mutex> lk(g_dl.m);
+            dlp = g_dl.p;
+            dlActive = g_dl.active;
+            dlQueueDone = g_dl.queueDone;
+            dlQueueTotal = g_dl.queueTotal;
+            dlNote = g_dl.note;
+            dlDone = !g_dl.active && g_dl.queueTotal > 0;
+        }
+        // haveWork = "do not sleep, I have a frame to build". Everything else
+        // blocks in the kernel until something happens, which is what keeps an
+        // idle window (and a phone's battery) at zero cost.
+        //
+        // Only glyph misses set it. A running download used to as well, via a
+        // 100 ms timeout — but progress arrives on the download thread, and it
+        // wakes this one through Host::postAppEvent() now (see the sink
+        // installed above), so the frame happens when the numbers change
+        // rather than ten times a second in the hope that they have.
+        host_->pump(/*haveWork=*/glyphsPending);
 
-        bool dirty = host->take_dirty() || glyphsPending;
+        // No surface, no frame. Android destroys the Renderer under us on
+        // APP_CMD_TERM_WINDOW; everything below this line — starting with
+        // renderer() — assumes one exists. pump() blocks while surfaceless, so
+        // this is a wait, not a spin.
+        //
+        // Checked AFTER the pump and never before: the pump is where "your
+        // surface is gone" is delivered, so anything decided before it cannot
+        // be trusted after it.
+        if (!renderable()) continue;
+
+        bool dirty = takeDirty() || glyphsPending || dlActive;
+
+        // A restore running on its own thread has rewritten config.toml.
+        // Adopt it here, on the thread that owns the pool and does the
+        // drawing, so the accounts it brought back appear as soon as they
+        // exist rather than at the next launch.
+        if (settingsCtl.take_config_reload()) {
+            syncAccounts();
+            dirty = true;
+        }
         // Plain pointer motion (no click/wheel/key) never sets `dirty` — the
         // host only marks that on resize — so hover-only feedback (button
         // hover, table row hover, the ghost popup's hover timer) never
@@ -929,9 +1206,38 @@ int main(int argc, char** argv) {
         float dtSeconds = std::chrono::duration<float>(now - lastFrameTime).count();
         lastFrameTime = now;
 
-        Renderer& r = host->renderer();
+        Renderer& r = renderer();
+        // A replaced Renderer invalidates every GPU object built against the
+        // old one. Detected by identity here rather than announced by the
+        // host, which has no idea who is holding what. On desktop this fires
+        // exactly once, on the first frame.
+        if (&r != boundRenderer) {
+            if (g_text_ok) upload_glyphs(r);
+            coverCache.rebind(&r);
+            boundRenderer = &r;
+        }
         float w = (float)r.width(), h = (float)r.height();
-        float rowH = h * 0.045f;
+        // Controls used to be sized purely off window height, which is a fine
+        // proxy for "how big is the screen" on a desktop window and a bad one
+        // on a phone held upright: a 720x1640 display made every row 74px tall
+        // inside 720px of width, so labels ran into each other and out of
+        // their boxes. Taking the smaller of the two keeps desktop sizing
+        // exactly as it was (height wins on any landscape window) and makes
+        // portrait proportionate to the dimension that is actually scarce.
+        float rowH = std::min(h * 0.045f, w * 0.075f);
+        // The display cutout, and the on-screen keyboard, kept apart because
+        // they are different in kind. The cutout is glass: hardware, permanent,
+        // there on every frame. The keyboard is software and only ever eats the
+        // bottom. Both are zero on a desktop, which is not a stub — a desktop
+        // window is a rectangle we own completely.
+        //
+        // They used to be summed into one inset set, which buys a choice of two
+        // bugs: a permanent dead strip along the bottom once the keyboard has
+        // been up, or a notch that stops being avoided the moment it goes down.
+        const SafeInsets cutout = host_->safeInsets();
+        struct { float left, top, right, bottom; } safe = {
+            (float)cutout.left, (float)cutout.top, (float)cutout.right,
+            (float)(cutout.bottom + host_->keyboardInset())};
 
         // Glyphs BEFORE any quad is emitted, in both directions:
         //  - a resize moved the type scale, so the per-size cells for the new
@@ -1058,7 +1364,8 @@ int main(int argc, char** argv) {
                 } else if (hit.action == gui::ActExportAccounts) {
                     settingsCtl.export_to((config::config_path().parent_path() / "accounts-export.toml").string());
                 } else if (hit.action == gui::ActImportAccounts) {
-                    settingsCtl.import_from((config::config_path().parent_path() / "accounts-export.toml").string());
+                    if (settingsCtl.import_from((config::config_path().parent_path() / "accounts-export.toml").string()))
+                        syncAccounts();
                 } else if (hit.action == gui::ActBackupLibrary) {
                     settingsCtl.backup_to();
                 } else if (hit.action == gui::ActRestoreBackup) {
@@ -1066,7 +1373,7 @@ int main(int argc, char** argv) {
                 } else if (hit.action == gui::ActReadableList) {
                     settingsCtl.write_readable();
                 } else if (hit.action == gui::ActBrowseDownloadDir) {
-                    host->pick_directory([&](const std::string& path) {
+                    host_->pickDirectory([&](const std::string& path) {
                         if (!path.empty()) settingsFields[gui::FieldDownloadDir].text = path;
                     });
                 } else if (hit.action >= gui::ActQualityBase && hit.action < gui::ActLanguageBase) {
@@ -1087,16 +1394,7 @@ int main(int argc, char** argv) {
                 } else if (hit.action == gui::ActSettingsSave) {
                     settingsCtl.mutable_settings().download_dir = settingsFields[gui::FieldDownloadDir].text;
                     settingsCtl.save();
-                    kb::api::set_requests_per_minute(settingsCtl.config().settings.requests_per_minute);
-                    // SettingsController edits its own copy of the config and
-                    // writes it to disk; the pool borrows a different one.
-                    // Re-read it and drop the cached (now stale-credentialed)
-                    // services so a token repaired here takes effect at once
-                    // instead of only after a restart.
-                    cfg = config::load();
-                    if (cfg.accounts.empty()) cfg.accounts.push_back({});
-                    accountPool.reload();
-                    rebuildCountryOptions();
+                    syncAccounts();
                 } else if (hit.action >= gui::ActFieldFocusBase && hit.action < gui::ActFieldFocusBase + gui::FieldCount) {
                     focusedField = hit.action - gui::ActFieldFocusBase;
                 }
@@ -1137,6 +1435,15 @@ int main(int argc, char** argv) {
                 libraryScrollPx = std::clamp(libraryScrollPx, 0.0f, maxScroll);
             }
         } else {
+            // Touch drags arrive here as wheel events too (android_host
+            // synthesises them past the tap slop), so this is what makes the
+            // stacked settings screen reachable with a finger.
+            if (input.wheelDelta != 0.0f) {
+                settingsScrollPx -= input.wheelDelta * rowH;
+                float maxScroll = std::max(0.0f, settingsContentH - lastSettingsAreaH);
+                settingsScrollPx = std::clamp(settingsScrollPx, 0.0f, maxScroll);
+            }
+
             // Reload the account edit fields from the controller whenever
             // the selected account changed (switching accounts must not
             // clobber in-progress edits, but must pick up the new one).
@@ -1202,14 +1509,31 @@ int main(int argc, char** argv) {
                 wantAction = gui::ActFieldFocusBase + focusedField;
                 field = &settingsFields[focusedField];
             }
+            // A tap anywhere else takes the keyboard away, which is why this
+            // starts at null every time rather than only being set on a hit.
+            imeField = nullptr;
             if (wantAction >= 0) {
                 for (auto& hit : hits) {
                     if (hit.action != wantAction) continue;
                     double nowSeconds = std::chrono::duration<double>(now.time_since_epoch()).count();
                     widgets::textFieldHandleClick(*field, canvas, hit.rect, input, nowSeconds);
+                    imeField = field;
                     break;
                 }
             }
+        }
+        // The IME reports its own dismissal (back gesture) as Escape; without
+        // this the app would still think the keyboard is up and never re-open it.
+        if (input.keyWentDown(key::Escape)) imeField = nullptr;
+
+        // Raise or dismiss the on-screen keyboard to match what is focused.
+        // Edge-triggered: show_keyboard() seeds the platform's edit buffer, so
+        // calling it every frame would fight the IME for the caret. A no-op on
+        // desktop, where AppHost's default implementations do nothing.
+        if (imeField != keyboardBoundField) {
+            if (imeField) host_->showKeyboard(imeField->text, imeField->cursorByte);
+            else          host_->hideKeyboard();
+            keyboardBoundField = imeField;
         }
 
         if (widget_preview) {
@@ -1264,20 +1588,35 @@ int main(int argc, char** argv) {
         } else {
             hits.clear();
 
-            // Nav bar (always visible, every screen).
-            Rect navRow = {w * 0.04f, h * 0.02f, w * 0.3f, rowH};
+            // Nav bar (always visible, every screen). Three labels in 30% of
+            // the width is comfortable on a desktop window and unreadable on
+            // a phone, where 30% of 720px cannot hold "Search Library
+            // Settings" — so upright, it gets the full content width.
+            const bool narrow = w < h;
+            const float contentX = w * 0.04f + safe.left;
+            const float contentW = w * 0.92f - safe.left - safe.right;
+            Rect navRow = {contentX, h * 0.02f + safe.top,
+                           narrow ? contentW : w * 0.3f, rowH};
             int navIdx = activeScreen == Screen::Search   ? 0
                        : activeScreen == Screen::Library  ? 1
                                                           : 2;
-            widgets::drawSegmented(canvas, navRow, {"Search", "Library", "Settings"}, navIdx,
-                                   theme::kSegmented);
+            // Geometry now, paint later: a scrolling screen slides content up
+            // underneath this, and it has to be drawn over that, not under it.
             auto navRects = widgets::segmentRects(navRow, 3);
             hits.push_back({navRects[0], kActNavSearch});
             hits.push_back({navRects[1], kActNavLibrary});
             hits.push_back({navRects[2], kActNavSettings});
 
-            Rect area = {w * 0.04f, navRow.y + navRow.h + h * 0.02f, w * 0.92f,
-                        h * 0.94f - navRow.h - h * 0.02f};
+            // The strip is an overlay only in the sense that it outlives the
+            // screen that started the download; it still gets its own space,
+            // because a progress bar drawn on top of the last row of results
+            // costs the user the row.
+            const bool showStrip = dlActive || dlDone || !dlNote.empty();
+            const float stripH = showStrip ? rowH * 0.95f + h * 0.024f : 0.0f;
+
+            const float areaY = navRow.y + navRow.h + h * 0.02f;
+            const float areaBottom = h * 0.96f - safe.bottom - stripH;
+            Rect area = {contentX, areaY, contentW, areaBottom - areaY};
             gui::PointerState ptr{input.pointerX, input.pointerY, input.pointerDown,
                                  input.pointerWentDown, input.pointerWentUp};
             if (activeScreen == Screen::Search) {
@@ -1291,8 +1630,87 @@ int main(int argc, char** argv) {
                 gui::draw_library(canvas, area, libraryCtl, coverCache, libraryScrollPx, rowH,
                                   hoveredAction, input.pointerDown, hits);
             } else {
-                gui::draw_settings(canvas, area, settingsCtl, settingsFields, focusedField,
-                                   accountListHover, hoveredAction, input.pointerDown, rowH, hits);
+                const size_t hitsBefore = hits.size();
+                lastSettingsAreaH = area.h;
+                settingsContentH = gui::draw_settings(
+                    canvas, area, settingsCtl, settingsFields, focusedField,
+                    accountListHover, hoveredAction, input.pointerDown, rowH,
+                    settingsScrollPx, hits);
+                // Scrolled-away controls are clipped out of the drawing but
+                // their rects are still absolute, so without this a tap on
+                // the nav bar could also press a button that is no longer
+                // under it.
+                hits.erase(std::remove_if(hits.begin() + (long)hitsBefore, hits.end(),
+                                          [&](const gui::Hit& hh) {
+                                              return hh.rect.y + hh.rect.h < area.y ||
+                                                     hh.rect.y > area.y + area.h;
+                                          }),
+                           hits.end());
+            }
+
+            // The chrome, last. Only the SDF layer honours Canvas::setClip —
+            // MSDF text is a separate buffer — so scrolled-away labels reach
+            // up here regardless of the clip inside draw_settings. Painting an
+            // opaque band and occluding the glyphs under it is how the modal
+            // path already solves exactly this, and it costs one rect.
+            canvas.rect(0.0f, 0.0f, w, area.y, theme::kBackground);
+            widgets::drawSegmented(canvas, navRow, {"Search", "Library", "Settings"}, navIdx,
+                                   theme::kSegmented);
+
+            // Download progress, over every screen rather than only the one it
+            // was started from: a download begun in Search keeps running while
+            // the user browses Library or edits Settings, and "how far along is
+            // it" is the question they will actually have. The CLI answers it
+            // with a carriage-return meter on a terminal; there is none here,
+            // and on Android there is nowhere for one to be.
+            if (showStrip) {
+                const float sh = rowH * 0.95f;
+                const float sy = h * 0.96f - safe.bottom - sh;
+                const float sx = contentX, sw = contentW;
+                // Same reason as the nav band above: text does not clip.
+                canvas.rect(0.0f, sy, w, h - sy, theme::kBackground);
+                canvas.rect(sx, sy, sw, sh, theme::kPanel, sh * 0.2f);
+
+                // Bytes, not tracks: a 20-track album whose first track is
+                // half done is 2% through, and a bar that says otherwise is
+                // the kind of progress bar people learn to distrust.
+                float frac = dlp.total_bytes > 0
+                    ? (float)((double)dlp.bytes / (double)dlp.total_bytes) : 0.0f;
+                if (frac > 1.0f) frac = 1.0f;
+                if (!dlActive && dlNote.empty()) frac = 1.0f;
+                canvas.rect(sx, sy + sh - sh * 0.12f, sw * frac, sh * 0.12f,
+                            dlNote.empty() ? theme::kAccent : theme::kDanger);
+
+                std::string line;
+                if (!dlNote.empty() && !dlActive) {
+                    line = dlNote;
+                } else {
+                    if (dlQueueTotal > 1) {
+                        int at = dlQueueDone + (dlActive ? 1 : 0);
+                        if (at > dlQueueTotal) at = dlQueueTotal;
+                        line = "[" + std::to_string(at) + "/" +
+                               std::to_string(dlQueueTotal) + "] ";
+                    }
+                    line += dlp.label;
+                    if (dlp.total_tracks > 1)
+                        line += "  " + std::to_string(dlp.done_tracks) + "/" +
+                                std::to_string(dlp.total_tracks);
+                    char buf[128];
+                    std::snprintf(buf, sizeof buf, "   %d%%   %.1f MB   %.1f MB/s",
+                                  (int)(frac * 100.0f + 0.5f),
+                                  (double)dlp.bytes / 1048576.0,
+                                  dlp.speed_bps / 1048576.0);
+                    line += buf;
+                    if (dlActive && dlp.eta_seconds >= 0) {
+                        int secs = (int)(dlp.eta_seconds + 0.5);
+                        std::snprintf(buf, sizeof buf, "   ETA %02d:%02d",
+                                      secs / 60, secs % 60);
+                        line += buf;
+                    }
+                    if (!dlActive) line = "Done — " + line;
+                }
+                canvas.text(line, sx + sh * 0.4f, sy + sh * 0.32f, sh * 0.34f,
+                            dlNote.empty() ? theme::kText : theme::kDanger);
             }
         }
 
@@ -1310,6 +1728,34 @@ int main(int argc, char** argv) {
                 std::printf("captured %ux%u to %s\n", cw, ch, capture_path);
             }
             return 0;
+        }
+
+        if (capturing) {
+            // Only once the atlas has settled. A glyph that was missing when
+            // this frame was built drew nothing and, worse, advanced by zero —
+            // so the line it is on is laid out wrongly, not merely blank.
+            // glyphsPending is the loop's own answer to that, and it forces
+            // another frame, so waiting here costs a pass or two and never
+            // hangs: the misses are finite.
+            if (g_text_ok && g_text.hasMisses()) continue;
+
+            std::vector<uint8_t> rgba;
+            uint32_t cw = 0, ch = 0;
+            if (!r.readbackLastFrame(rgba, cw, ch)) {
+                std::fprintf(stderr, "[x] readback failed for screen '%s'\n",
+                             opts.captureScreens[captureIdx].c_str());
+                return 1;
+            }
+            if (opts.onCaptured &&
+                !opts.onCaptured(opts.captureScreens[captureIdx], rgba, cw, ch))
+                return 1;
+
+            if (++captureIdx >= opts.captureScreens.size()) return 0;
+            applyCaptureScreen(opts.captureScreens[captureIdx]);
+            // The next screen has to be DRAWN, and nothing in a headless run
+            // will mark the frame dirty on its own — there is no pointer to
+            // move and no compositor to send an expose.
+            markDirty();
         }
     }
 

@@ -93,6 +93,12 @@ void CoverCache::clear() {
     items_.clear();
 }
 
+void CoverCache::rebind(Renderer* renderer) {
+    items_.clear();   // drop, do not destroy — see the header
+    renderer_ = renderer;
+    loadsLeft_ = 0;
+}
+
 void CoverCache::evictIfOverBudget() {
     if (items_.size() <= budget) return;
     // Least-recently-drawn first. Linear scans over a map capped at `budget`

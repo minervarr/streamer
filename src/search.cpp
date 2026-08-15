@@ -126,8 +126,8 @@ static kb::Result<int> run_one(kb::QobuzApiService &svc,
     if (kind == "tracks") {
         auto res = svc.search_tracks(query, fetch_limit, {});
         if (!res.ok()) return res.error();
-        auto items = res.value().items.value_or({});
-        std::vector<decltype(items)::value_type> filtered;
+        auto items = search::value_or_empty(res.value().items);
+        std::vector<typename decltype(items)::value_type> filtered;
         for (auto &t : items) {
             if (passes(t->duration.value_or(0), min_secs, max_secs)) {
                 filtered.push_back(t);
@@ -179,7 +179,7 @@ static kb::Result<int> run_one(kb::QobuzApiService &svc,
     if (kind == "artists") {
         auto res = svc.search_artists(query, limit, {});
         if (!res.ok()) return res.error();
-        auto items = res.value().items.value_or({});
+        auto items = search::value_or_empty(res.value().items);
         if (tsv) {
             for (auto &a : items)
                 std::printf("%d\t%s\t\t\t\t\t\t\tartist\t\t\n",
@@ -196,8 +196,8 @@ static kb::Result<int> run_one(kb::QobuzApiService &svc,
     if (kind == "playlists") {
         auto res = svc.search_playlists(query, fetch_limit, {});
         if (!res.ok()) return res.error();
-        auto items = res.value().items.value_or({});
-        std::vector<decltype(items)::value_type> filtered;
+        auto items = search::value_or_empty(res.value().items);
+        std::vector<typename decltype(items)::value_type> filtered;
         for (auto &p : items) {
             if (passes(p->duration.value_or(0), min_secs, max_secs)) {
                 filtered.push_back(p);
@@ -231,8 +231,8 @@ static kb::Result<int> run_one(kb::QobuzApiService &svc,
     // albums (default)
     auto res = svc.search_albums(query, fetch_limit, {});
     if (!res.ok()) return res.error();
-    auto items = res.value().items.value_or({});
-    std::vector<decltype(items)::value_type> filtered;
+    auto items = search::value_or_empty(res.value().items);
+    std::vector<typename decltype(items)::value_type> filtered;
     for (auto &a : items) {
         if (passes(a->duration.value_or(0), min_secs, max_secs)) {
             filtered.push_back(a);

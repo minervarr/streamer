@@ -155,18 +155,63 @@ struct ProgressMeter {
     }
 };
 
+// The GUI's sink, if any. Read on every progress callback (i.e. from the
+// download worker threads), written once at startup before any download
+// exists — the mutex is what makes that "once" safe rather than assumed.
+std::mutex g_sink_mtx;
+dl::ProgressSink g_sink;
+
+dl::ProgressSink current_sink() {
+    std::lock_guard<std::mutex> lk(g_sink_mtx);
+    return g_sink;
+}
+
 } // namespace
 
+void set_progress_sink(ProgressSink sink) {
+    std::lock_guard<std::mutex> lk(g_sink_mtx);
+    g_sink = std::move(sink);
+}
+
+// Hands a failure to the front end. stderr still gets it too: the CLI is a
+// terminal program and this must not change what it prints.
+static void report_error(const std::string& what, const std::string& message) {
+    std::fprintf(stderr, "%s %s\n", what.c_str(), message.c_str());
+    if (auto sink = current_sink()) {
+        Progress p;
+        p.label = message;
+        p.error = message;
+        sink(p);
+    }
+}
+
 // Single track: percentage plus live speed, so a stalled transfer is visible.
-static kb::TrackProgressFn single_track_progress() {
+static kb::TrackProgressFn single_track_progress(std::string label) {
     auto m = std::make_shared<ProgressMeter>();
     m->track_count = 1;
-    return [m](int track_id, uint64_t dl, uint64_t tot) {
+    return [m, label](int track_id, uint64_t dl, uint64_t tot) {
         std::lock_guard<std::mutex> lk(m->mtx);
         m->per_track[track_id] = {dl, tot};
         m->sample_speed_locked(dl);
         bool complete = tot > 0 && dl >= tot;
         if (!complete && !m->should_draw_locked()) return;
+
+        if (auto sink = current_sink()) {
+            dl::Progress p;
+            p.label        = label;
+            p.done_tracks  = complete ? 1 : 0;
+            p.total_tracks = 1;
+            p.bytes        = dl;
+            p.total_bytes  = tot;
+            // The live EWMA at the finish line is measuring the last few KB
+            // dribbling in; the average is what actually happened.
+            p.speed_bps    = complete ? m->average_speed_locked(dl) : m->speed;
+            if (!complete && m->eta_is_meaningful_locked(dl, tot) && m->speed > 0 && tot > dl)
+                p.eta_seconds = static_cast<double>(tot - dl) / m->speed;
+            p.complete     = complete;
+            sink(p);
+            return;
+        }
 
         int pct = tot > 0 ? static_cast<int>(dl * 100 / tot) : 0;
         if (complete) {
@@ -188,10 +233,10 @@ static kb::TrackProgressFn single_track_progress() {
 }
 
 // Album: aggregate bytes across every concurrent track, with speed and ETA.
-static kb::TrackProgressFn album_progress(int total_tracks) {
+static kb::TrackProgressFn album_progress(int total_tracks, std::string label) {
     auto m = std::make_shared<ProgressMeter>();
     m->track_count = total_tracks;
-    return [m](int track_id, uint64_t dl, uint64_t tot) {
+    return [m, label](int track_id, uint64_t dl, uint64_t tot) {
         std::lock_guard<std::mutex> lk(m->mtx);
         m->per_track[track_id] = {dl, tot};
         if (tot > 0 && dl >= tot) m->finished.insert(track_id);
@@ -204,6 +249,23 @@ static kb::TrackProgressFn album_progress(int total_tracks) {
         if (!complete && !m->should_draw_locked()) return;
 
         uint64_t est = m->estimated_total_locked();
+
+        if (auto sink = current_sink()) {
+            dl::Progress p;
+            p.label        = label;
+            p.done_tracks  = n;
+            p.total_tracks = m->track_count;
+            p.bytes        = done_bytes;
+            p.total_bytes  = est;
+            p.speed_bps    = complete ? m->average_speed_locked(done_bytes) : m->speed;
+            if (!complete && m->eta_is_meaningful_locked(done_bytes, est) &&
+                m->speed > 0 && est > done_bytes)
+                p.eta_seconds = static_cast<double>(est - done_bytes) / m->speed;
+            p.complete     = complete;
+            sink(p);
+            return;
+        }
+
         if (complete) {
             std::printf("\r  [%2d/%d]  %s  %.1f MB/s average        ", n, m->track_count,
                         format_bytes(done_bytes).c_str(),
@@ -310,11 +372,10 @@ bool run(kb::QobuzApiService &svc,
             int tid = target.id;
             std::printf("%s %d ...\n", i18n::t("downloading_track"), tid);
             auto opts = base_opts(concurrency, embed_metadata);
-            opts.progress = single_track_progress();
+            opts.progress = single_track_progress("Track " + std::to_string(tid));
             auto res = kb::download_track(svc, tid, format_id, base_dir, opts);
             if (!res.ok()) {
-                std::fprintf(stderr, "%s %s\n", i18n::t("error_download"),
-                             res.error().message.c_str());
+                report_error(i18n::t("error_download"), res.error().message);
             } else {
                 std::printf("%s %s\n", i18n::t("saved"), res.value().c_str());
                 success = true;
@@ -347,8 +408,7 @@ bool run(kb::QobuzApiService &svc,
             // not an accepted extra; the array comes back regardless.)
             auto album_res = svc.get_album(aid, std::string("track_ids"));
             if (!album_res.ok()) {
-                std::fprintf(stderr, "%s %s\n",
-                             i18n::t("error_download"), album_res.error().message.c_str());
+                report_error(i18n::t("error_download"), album_res.error().message);
                 return;
             }
             const kb::Album &al = album_res.value();
@@ -361,15 +421,17 @@ bool run(kb::QobuzApiService &svc,
                 (al.tracks && al.tracks->items)
                     ? static_cast<int>(al.tracks->items->size()) : 0);
             auto opts = base_opts(concurrency, embed_metadata);
-            opts.progress = (total == 1) ? single_track_progress()
-                                         : album_progress(total > 0 ? total : 1);
+            // The title, not the id: the id is what the filesystem needs, but
+            // a progress line is for a person, who asked for a record by name.
+            std::string label = al.title.value_or("Album " + aid);
+            opts.progress = (total == 1) ? single_track_progress(label)
+                                         : album_progress(total > 0 ? total : 1, label);
             std::printf("%s %s ...\n", i18n::t("downloading_album"), aid.c_str());
 
             std::vector<std::string> paths;
             auto res = kb::download_album(svc, aid, format_id, base_dir, opts);
             if (!res.ok()) {
-                std::fprintf(stderr, "%s %s\n", i18n::t("error_download"),
-                             res.error().message.c_str());
+                report_error(i18n::t("error_download"), res.error().message);
             } else {
                 paths  = res.value();
                 success = !paths.empty();
@@ -415,8 +477,7 @@ bool run(kb::QobuzApiService &svc,
             auto opts = base_opts(concurrency, embed_metadata);
             auto res = kb::download_artist(svc, arid, format_id, base_dir, opts);
             if (!res.ok()) {
-                std::fprintf(stderr, "%s %s\n", i18n::t("error_download"),
-                             res.error().message.c_str());
+                report_error(i18n::t("error_download"), res.error().message);
             } else {
                 success = !res.value().empty();
                 if (save_extras && success)
@@ -438,8 +499,7 @@ bool run(kb::QobuzApiService &svc,
             auto opts = base_opts(concurrency, embed_metadata);
             auto res = kb::download_playlist(svc, pid, format_id, base_dir, opts);
             if (!res.ok()) {
-                std::fprintf(stderr, "%s %s\n", i18n::t("error_download"),
-                             res.error().message.c_str());
+                report_error(i18n::t("error_download"), res.error().message);
             } else {
                 success = !res.value().empty();
             }

@@ -14,7 +14,19 @@ namespace fs = std::filesystem;
 
 namespace config {
 
+// Set once at startup by platforms whose answer cannot come from the
+// environment; see the declaration in config.hh. Plain globals on purpose:
+// written before any thread exists, read-only afterwards.
+static fs::path g_platform_config_dir;
+static fs::path g_platform_download_dir;
+
+void set_platform_dirs(const fs::path &config_dir, const fs::path &download_dir) {
+    g_platform_config_dir   = config_dir;
+    g_platform_download_dir = download_dir;
+}
+
 static fs::path config_dir() {
+    if (!g_platform_config_dir.empty()) return g_platform_config_dir;
 #ifdef _WIN32
     const char *p = std::getenv("APPDATA");
     if (p) return fs::path(p) / "streamer";
@@ -33,6 +45,7 @@ static fs::path config_dir() {
 fs::path config_path() { return config_dir() / "config.toml"; }
 
 static fs::path default_download_dir() {
+    if (!g_platform_download_dir.empty()) return g_platform_download_dir;
 #ifdef _WIN32
     const char *p = std::getenv("USERPROFILE");
     if (p) return fs::path(p) / "Music";

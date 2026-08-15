@@ -64,6 +64,19 @@ public:
     bool backup_busy() const { return backup_busy_.load(); }
     std::string backup_status() const;
 
+    // True once, after a restore has rewritten config.toml underneath us.
+    //
+    // backup::restore() applies the backed-up accounts and settings by writing
+    // the file directly (backup.cpp's config::save), so the copy held here —
+    // read at startup and never re-read — still describes the machine as it
+    // was before the restore. That is why a restored account list used to show
+    // up only after quitting and reopening the app, and why nothing could be
+    // downloaded in between: the account pool had nothing to work with.
+    //
+    // Poll from the frame loop, not the job: the reload replaces cfg_, which
+    // the drawing code reads every frame.
+    bool take_config_reload();
+
     const std::string& last_error() const { return last_error_; }
     bool dirty() const { return dirty_; }
 
@@ -77,6 +90,7 @@ private:
     uint64_t revision_ = 0;
 
     std::atomic<bool> backup_busy_{false};
+    std::atomic<bool> config_stale_{false};
     mutable std::mutex backup_mutex_;
     std::string backup_status_;
 

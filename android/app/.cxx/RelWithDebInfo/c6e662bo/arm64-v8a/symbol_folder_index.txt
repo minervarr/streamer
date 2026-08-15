@@ -1,0 +1,1 @@
+/home/nava/Files/code/active/streamer/android/app/build/intermediates/cxx/RelWithDebInfo/c6e662bo/obj/arm64-v8a

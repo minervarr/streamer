@@ -1,0 +1,21 @@
+# ninja log v5
+6274	6276	1786641988906681275	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-patch	5cb997a9856170ee
+6279	6281	1786641988911681347	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-build	8c310e65581a30b
+6279	6281	1786641988911681347	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-build	8c310e65581a30b
+6286	6289	1786641988918681447	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-done	b7111a70b4bc849d
+6274	6276	1786641988906681275	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-patch	5cb997a9856170ee
+6272	6274	1786641988904681247	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-update	33f003bbbdbab278
+0	7	1786641982637591542	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-mkdir	5b454c6a4d332b07
+6283	6286	1786641988915681404	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-test	2b02903b99d97ef5
+6286	6289	1786641988918681447	CMakeFiles/sqlite3_amalg-populate-complete	b7111a70b4bc849d
+6286	6289	1786641988918681447	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-done	b7111a70b4bc849d
+0	7	1786641982637591542	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-mkdir	5b454c6a4d332b07
+7	6272	1786641988902681218	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-download	dd2af63563f7ebec
+6283	6286	1786641988915681404	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-test	2b02903b99d97ef5
+6272	6274	1786641988904681247	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-update	33f003bbbdbab278
+6277	6279	1786641988909681318	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-configure	663eaf83ac1e6a24
+6281	6283	1786641988913681375	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-install	6fe0b4120ba4da29
+6286	6289	1786641988918681447	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/CMakeFiles/sqlite3_amalg-populate-complete	b7111a70b4bc849d
+6281	6283	1786641988913681375	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-install	6fe0b4120ba4da29
+6277	6279	1786641988909681318	/home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/arm64-v8a/_deps/sqlite3_amalg-subbuild/sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-configure	663eaf83ac1e6a24
+7	6272	1786641988902681218	sqlite3_amalg-populate-prefix/src/sqlite3_amalg-populate-stamp/sqlite3_amalg-populate-download	dd2af63563f7ebec

@@ -3,6 +3,7 @@
 #include "config.hh"
 #include "download.hh"
 #include "library.hh"
+#include "search.hh"
 #include "service_factory.hh"
 
 #include <core/models.hh>
@@ -182,7 +183,7 @@ bool SearchController::search(const std::string& query_text, const std::string& 
         auto take = [&](auto& res, auto&& conv) {
             if (!res.ok()) { combined_error += res.error().message + " "; return; }
             ok = true;
-            for (auto& item : res.value().items.value_or({}))
+            for (auto& item : search::value_or_empty(res.value().items))
                 if (item) {
                     auto r = conv(*item);
                     r.country = country;

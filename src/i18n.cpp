@@ -18,6 +18,10 @@ static Lang detect_os() {
     WORD primary = GetUserDefaultUILanguage() & 0x3FF;
     if (primary == 0x0A) return Lang::Es; // LANG_SPANISH
 #else
+    // Android sets no LANG, so this would silently make every device English.
+    // It never gets there: the Android host reads the system locale from
+    // AConfiguration and passes it to init() as the override, which is the
+    // same door an explicit config.toml `language` comes through.
     const char *env = std::getenv("LANG");
     if (env && env[0] == 'e' && env[1] == 's') return Lang::Es;
 #endif

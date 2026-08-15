@@ -8,6 +8,17 @@ namespace kb { class QobuzApiService; }
 
 namespace search {
 
+// The contents of an optional list, or an empty one.
+//
+// This exists because `opt.value_or({})` does not compile against libc++ (the
+// NDK's standard library, so: every Android build). value_or takes a deduced
+// `U&&`, and a braced-init-list has no type to deduce from — libstdc++ accepts
+// it anyway, which is why it went unnoticed on Linux for as long as it did.
+// Every Qobuz search result wraps its items in an optional, so this is used
+// wherever those are read.
+template <class T>
+T value_or_empty(const std::optional<T> &o) { return o ? *o : T{}; }
+
 // Parse "10m", "1h30m", "1:30:00", "90" → seconds. Returns error string on failure.
 std::optional<std::string> parse_duration(const std::string &s, int &out_secs);
 

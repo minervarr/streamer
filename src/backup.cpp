@@ -490,18 +490,36 @@ RestoreReport restore(const std::string &file, const RestoreOptions &opts,
     auto settings = read_kv(bk.db, "backup_settings");
     auto backup_accounts = read_accounts(bk.db);
 
+    config::Config cur = config::load();
+
     RestoreReport rep;
-    rep.root = !opts.dir.empty()             ? opts.dir
-             : !settings["download_dir"].empty() ? settings["download_dir"]
-             : resolved_root("");
+    // Where the files go is a property of the machine doing the restore, not
+    // of the backup. The file records the directory it was made from, which
+    // is a fact about the OLD machine: restoring a desktop backup onto a
+    // phone adopted "/home/<user>/..." verbatim, and then nothing could be
+    // written at all — even the catalog failed with "Read-only file system
+    // [/home]" — while the UI showed a download sitting at 0%.
+    //
+    // An explicit --dir still wins; the backup's own path is used only when
+    // this machine has nothing configured, which is the same-machine rebuild
+    // the field was there for.
+    rep.root = !opts.dir.empty()
+                   ? opts.dir
+             : !cur.settings.download_dir.empty()
+                   ? cur.settings.download_dir.u8string()
+             : !settings["download_dir"].empty()
+                   ? settings["download_dir"]
+                   : resolved_root("");
 
     // ── config ────────────────────────────────────────────────────────────
-    config::Config cur = config::load();
     if (opts.apply_config && !backup_accounts.empty() && !opts.dry_run) {
         bool fresh = !fs::exists(config::config_path()) || cur.accounts.empty();
         if (fresh || opts.force_config) {
             cur.accounts = backup_accounts;
-            cur.settings.download_dir = fs::u8path(rep.root);
+            // Same reasoning as rep.root above: adopt the backup's directory
+            // only when this machine had none of its own to keep.
+            if (cur.settings.download_dir.empty())
+                cur.settings.download_dir = fs::u8path(rep.root);
             if (!settings["quality"].empty()) cur.settings.quality = settings["quality"];
             if (!settings["language"].empty()) cur.settings.language = settings["language"];
             if (!settings["concurrency"].empty())

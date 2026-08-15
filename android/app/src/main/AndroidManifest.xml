@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+        The library is ID-addressed on a real filesystem and can run to hundreds
+        of gigabytes, so it cannot live in app-private storage (wiped on
+        uninstall) and cannot be reached through SAF (content:// URIs are not
+        paths, and library.cpp / backup.cpp / download.cpp all walk the tree
+        with std::filesystem). All-files access is the only model that fits.
+        It also means this app is sideload-only: Play Store rejects it.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <!-- Pre-R devices, where MANAGE_EXTERNAL_STORAGE does not exist. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+
+    <application
+        android:label="streamer"
+        android:hardwareAccelerated="true"
+        android:requestLegacyExternalStorage="true">
+
+        <!--
+            StreamerActivity, not android.app.NativeActivity: it *is* a
+            NativeActivity, plus the off-screen EditText that gives the app the
+            system IME instead of a hand-rolled keyboard.
+        -->
+        <activity
+            android:name=".StreamerActivity"
+            android:exported="true"
+            android:label="streamer"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustNothing"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|smallestScreenSize">
+
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="streamer_gui" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

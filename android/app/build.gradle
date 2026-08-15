@@ -1,0 +1,81 @@
+plugins {
+  id 'com.android.application'
+}
+
+android {
+    namespace "io.nava.streamer"
+
+    compileSdkVersion 37
+    ndkVersion "29.0.14206865"
+
+    defaultConfig {
+        applicationId "io.nava.streamer"
+        minSdkVersion 26
+        // 30+ on purpose, unlike the framework's demo: MANAGE_EXTERNAL_STORAGE
+        // only exists from R, and the library needs real filesystem paths.
+        targetSdkVersion 34
+        versionCode 1
+        versionName "1.0"
+
+        externalNativeBuild {
+            cmake {
+                // The GUI is the app here, and its shaders are compiled by
+                // slangc at build time — the same requirement as on desktop.
+                // Passed explicitly rather than relying on $VULKAN_SDK, since
+                // VceShaders.cmake falls back to a hardcoded Windows path.
+                arguments "-DSTREAMER_GUI=ON",
+                          "-DVCE_SLANGC=${project.properties.getOrDefault('vce.slangc', '/opt/shader-slang/bin/slangc')}"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "../CMakeLists.txt"
+        }
+    }
+
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "x86_64"
+            universalApk false
+        }
+    }
+
+    packagingOptions {
+
+        jniLibs {
+            // The .so is loaded by NativeActivity through the normal library
+            // path, and the CJK fonts already make this APK large; leaving the
+            // libraries compressed in the APK trades install size for a little
+            // startup time, which is the right way round here.
+            useLegacyPackaging false
+        }
+    }
+}
+
+// The shaders, the fonts and the CA bundle are produced by the CMake build
+// (slangc compiles the .slang sources; the rest are copied from the repo), and
+// they land in src/main/assets. But AGP merges assets *before* it runs the
+// native build, so on a clean tree the APK is packaged from an assets
+// directory that is still empty and the app ships with no fonts, no shaders
+// and no way to verify a certificate — while the build reports success and the
+// files appear on disk, so the *next* build looks fine. A one-build lag that
+// hides itself.
+//
+// Ordering the merge after the native build is what makes a clean checkout
+// produce a correct APK the first time.
+afterEvaluate {
+    tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+         .configureEach { mergeTask ->
+             mergeTask.dependsOn tasks.matching { it.name.startsWith("buildCMake") }
+         }
+}

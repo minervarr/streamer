@@ -135,7 +135,7 @@ else
     if [[ -z "$slangc" ]]; then
         for c in "${VULKAN_SDK:+$VULKAN_SDK/bin/slangc}" \
                  "$(command -v slangc || true)" \
-                 /opt/shader-slang-bin/bin/slangc; do
+                 /opt/shader-slang/bin/slangc; do
             if [[ -n "$c" && -x "$c" ]]; then slangc="$c"; break; fi
         done
     fi

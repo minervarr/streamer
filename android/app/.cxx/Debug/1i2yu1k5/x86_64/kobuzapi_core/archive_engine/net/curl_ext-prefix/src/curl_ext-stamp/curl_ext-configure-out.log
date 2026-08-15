@@ -1,0 +1,11 @@
+-- Using CMake version 3.22.1-g37088a8
+-- curl version=[8.11.1]
+-- CMake platform flags: UNIX CROSS
+-- Cross-compiling: Linux/x86_64 -> Android/x86_64
+-- Picky compiler options: -Werror-implicit-function-declaration -Wextra -Wall -pedantic -Wbad-function-cast -Wconversion -Winline -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wno-long-long -Wno-multichar -Wpointer-arith -Wshadow -Wsign-compare -Wundef -Wunused -Wwrite-strings -Waddress -Wattributes -Wcast-align -Wdeclaration-after-statement -Wdiv-by-zero -Wempty-body -Wendif-labels -Wfloat-equal -Wformat-security -Wignored-qualifiers -Wmissing-field-initializers -Wmissing-noreturn -Wno-format-nonliteral -Wno-system-headers -Wold-style-definition -Wredundant-decls -Wsign-conversion -Wno-error=sign-conversion -Wstrict-prototypes -Wtype-limits -Wunreachable-code -Wunused-parameter -Wvla -Wshift-sign-overflow -Wshorten-64-to-32 -Wformat=2 -Wlanguage-extension-token -Wdouble-promotion -Wenum-conversion -Wpragmas -Wunused-const-variable -Wheader-guard -Wsometimes-uninitialized -Wcomma -Wmissing-variable-declarations -Wassign-enum -Wextra-semi-stmt -Wimplicit-fallthrough
+-- Protocols: http https ws wss
+-- Features: alt-svc AsynchDNS HSTS HTTPS-proxy IPv6 Largefile libz SSL threadsafe UnixSockets
+-- Enabled SSL backends: mbedTLS
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/nava/Files/code/active/streamer/android/app/.cxx/Debug/1i2yu1k5/x86_64/kobuzapi_core/archive_engine/net/curl_ext-prefix/src/curl_ext-build

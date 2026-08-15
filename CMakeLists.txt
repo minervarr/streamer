@@ -109,7 +109,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}")
 # Paths into Kobuzapi++
 set(KOBUZAPI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/first_party/KawusapiCC")
 
-# ── bundled curl (third_party/curl) ─────────────────────────────────────────
+# ── bundled curl + taglib ───────────────────────────────────────────────────
+# Desktop only. On Android, ae_net and ae_tag cross-compile their own curl
+# (with mbedTLS, since the NDK ships no TLS and Android exposes no readable
+# trust store) and their own TagLib — see archive_engine/core/net/CMakeLists.txt
+# and .../tag/CMakeLists.txt, whose `if(ANDROID)` branches are the supported
+# path. Building the vendored copies here too would mean two curls and two
+# TagLibs in one link, so the whole block is skipped rather than adapted.
+if(NOT ANDROID)
+
 set(BUILD_CURL_EXE        OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS     OFF CACHE BOOL "" FORCE)
 set(CURL_STATICLIB        ON  CACHE BOOL "" FORCE)
@@ -180,23 +188,32 @@ configure_file(
     "${_taglib_flat}/taglib_config.h"
     COPYONLY)
 
+endif() # NOT ANDROID
+
 # ── Kobuzapi++ (KawusapiCC/core: kobuzapi_core, ae_util, ae_net, ae_tag) ────
 # CURL::libcurl and `tag` (TagLib) targets above must exist before this —
 # KawusapiCC/core's ae_net/ae_tag CMakeLists.txt link against them directly
 # instead of streamer re-implementing http.cc/tag.cc compilation itself.
 add_subdirectory(${KOBUZAPI_ROOT}/core ${CMAKE_BINARY_DIR}/kobuzapi_core)
-target_include_directories(ae_tag PRIVATE
-    "${CMAKE_BINARY_DIR}/taglib_flat_include"   # flat <taglib/...> layout
-)
+if(NOT ANDROID)
+    target_include_directories(ae_tag PRIVATE
+        "${CMAKE_BINARY_DIR}/taglib_flat_include"   # flat <taglib/...> layout
+    )
+endif()
 
 # ── FetchContent dependencies ────────────────────────────────────────────────
 include(FetchContent)
 
-FetchContent_Declare(CLI11
-    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-    GIT_TAG        v2.4.2
-)
-FetchContent_MakeAvailable(CLI11)
+# CLI11 parses argv for the `streamer` command-line binary. An Android app has
+# no argv and no terminal to print to, so neither the library nor the CLI
+# target is built there — the GUI links streamer_core directly.
+if(NOT ANDROID)
+    FetchContent_Declare(CLI11
+        GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+        GIT_TAG        v2.4.2
+    )
+    FetchContent_MakeAvailable(CLI11)
+endif()
 
 FetchContent_Declare(tomlplusplus
     GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
@@ -205,9 +222,20 @@ FetchContent_Declare(tomlplusplus
 FetchContent_MakeAvailable(tomlplusplus)
 
 # SQLite3 amalgamation (downloaded at configure time)
+#
+# DOWNLOAD_EXTRACT_TIMESTAMP only exists from CMake 3.24. Older CMake does not
+# reject it — ExternalProject folds an unrecognised keyword into the *previous*
+# one's value list, so URL silently becomes a three-entry list and the
+# configure dies with "At least one entry of URL is a path (invalid in a
+# list)". The NDK bundles CMake 3.22.1, which is how the Android build found
+# this; desktop never hit it.
+set(_sqlite_fc_extra "")
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+    set(_sqlite_fc_extra DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+endif()
 FetchContent_Declare(sqlite3_amalg
     URL https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    ${_sqlite_fc_extra}
 )
 FetchContent_MakeAvailable(sqlite3_amalg)
 add_library(sqlite3_lib STATIC ${sqlite3_amalg_SOURCE_DIR}/sqlite3.c)
@@ -250,6 +278,7 @@ if(MSVC)
 endif()
 
 # ── streamer executable (CLI) ────────────────────────────────────────────────
+if(NOT ANDROID)
 add_executable(streamer src/main.cpp)
 target_link_libraries(streamer PRIVATE streamer_core CLI11::CLI11)
 if(MSVC)
@@ -257,12 +286,15 @@ if(MSVC)
         $<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Ob2>
         $<$<CONFIG:Release>:/arch:AVX2>)
 endif()
+endif() # NOT ANDROID
 
 # ── new cross-platform GUI (Vulkan/vk_canvas) ───────────────────────────────
 # Needs a Slang shader compiler (Vulkan SDK / shader-slang) at build time, so
 # a box without one must still configure. Override with -DSTREAMER_GUI=ON/OFF
 # and -DVCE_SLANGC=/path/to/slangc.
-if(WIN32)
+if(ANDROID)
+    set(_gui_default ON)   # the GUI *is* the app there; there is no CLI
+elseif(WIN32)
     set(_gui_default ON)
 elseif(UNIX)
     set(_gui_default OFF)

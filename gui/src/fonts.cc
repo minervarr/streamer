@@ -6,10 +6,15 @@
 
 // The concrete asset reader, for glyph_selftest() only — everything else here
 // takes an AssetReader& from its caller. Same split the host layer uses.
+// Android has no FileAssetReader — assets live inside the APK, reached through
+// AAssetManager — and no selftest either: it is a desktop dev harness run from
+// a terminal. So neither header exists there and neither is needed.
+#ifndef __ANDROID__
 #ifdef _WIN32
 #include "win32_platform.hh"
 #else
 #include "wayland_platform.hh"
+#endif
 #endif
 
 #include <algorithm>
@@ -156,6 +161,11 @@ void bake_glyph_misses(Renderer& r) {
 }
 
 void glyph_selftest(const std::function<void(bool, const char*)>& check) {
+#ifdef __ANDROID__
+    // Desktop-only harness: it opens the faces off the filesystem, and there
+    // is no --selftest entry point on Android to reach it anyway.
+    (void)check;
+#else
     FileAssetReader assets;
     RasterFont font;
     if (!font.open(assets, kFontRegular)) {
@@ -199,4 +209,5 @@ void glyph_selftest(const std::function<void(bool, const char*)>& check) {
     // truncation and centring as well as the text itself. Zero advance for
     // something we just baked would mean the bake did not take.
     check(font.cellCount() >= cps.size(), "every requested codepoint got a cell");
+#endif // !__ANDROID__
 }

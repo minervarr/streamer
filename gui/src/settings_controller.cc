@@ -130,18 +130,32 @@ void SettingsController::run_backup_job(std::function<void()> work) {
     }).detach();
 }
 
-// The user's home folder, the same way src/config.cpp finds it.
-static fs::path home_folder() {
+// Where the one-file backup and the readable listing are written and looked
+// for. Desktop: the user's home folder, the same way src/config.cpp finds it —
+// a file you carry to another machine has to be somewhere you can find it.
+//
+// Android has no home folder, and getenv("HOME") returning nothing would leave
+// this at "." — the process CWD, which is "/" and not writable, so every
+// backup would fail with a message about a path the user has never seen. It
+// goes beside the library there: the one directory the user has explicitly
+// granted access to and can reach with a file manager.
+static fs::path backup_folder(const fs::path& download_dir) {
+#ifdef __ANDROID__
+    return download_dir;
+#else
+    (void)download_dir;
 #ifdef _WIN32
     if (const char* p = std::getenv("USERPROFILE")) return fs::path(p);
 #else
     if (const char* p = std::getenv("HOME")) return fs::path(p);
 #endif
     return fs::path(".");
+#endif
 }
 
 void SettingsController::backup_to() {
-    const std::string file = (home_folder() / kBackupFileName).u8string();
+    const std::string file =
+        (backup_folder(cfg_.settings.download_dir) / kBackupFileName).u8string();
     run_backup_job([this, file]() {
         set_backup_status("Backing up to " + file + " ...");
         backup::CreateOptions opts;
@@ -154,7 +168,8 @@ void SettingsController::backup_to() {
 }
 
 void SettingsController::restore_from() {
-    const std::string file = (home_folder() / kBackupFileName).u8string();
+    const std::string file =
+        (backup_folder(cfg_.settings.download_dir) / kBackupFileName).u8string();
     if (!fs::exists(fs::u8path(file))) {
         // Naming the path beats "file not found": it tells the user exactly
         // where to drop the backup they brought from the old machine.
@@ -175,16 +190,34 @@ void SettingsController::restore_from() {
                         std::to_string(r.failed) + " failed";
         if (!r.failures_path.empty()) s += " — see " + r.failures_path;
         set_backup_status(s);
+        // Whether or not any track came down, the restore has by now applied
+        // the backup's accounts and settings to config.toml. Tell the frame
+        // loop to pick them up (see take_config_reload).
+        config_stale_.store(true);
     });
 }
 
+bool SettingsController::take_config_reload() {
+    if (!config_stale_.exchange(false)) return false;
+    cfg_ = config::load();
+    // Whatever was half-typed into the settings form describes the old
+    // config; the restore is the newer statement of intent, so it wins and
+    // the form is refilled from it rather than being saved over it.
+    dirty_ = false;
+    if (current_ >= (int)cfg_.accounts.size()) current_ = 0;
+    ++revision_;
+    return true;
+}
+
 void SettingsController::write_readable() {
-    const std::string backup_file = (home_folder() / kBackupFileName).u8string();
+    const std::string backup_file =
+        (backup_folder(cfg_.settings.download_dir) / kBackupFileName).u8string();
     // The readable list is worth having whether or not a backup was made
     // here: fall back to the live catalog so the button always does something.
     const std::string live = backup::catalog_path(
         cfg_.settings.download_dir.u8string());
-    const std::string out = (home_folder() / kReadableFileName).u8string();
+    const std::string out =
+        (backup_folder(cfg_.settings.download_dir) / kReadableFileName).u8string();
     run_backup_job([this, backup_file, live, out]() {
         const std::string src = fs::exists(fs::u8path(backup_file)) ? backup_file : live;
         set_backup_status("Reading " + src + " ...");

@@ -22,4 +22,13 @@ namespace qobuz {
 kb::Result<kb::QobuzApiService> make_service(const config::Account &account,
                                              bool authenticate = true);
 
+// PEM bundle every service built here verifies certificates against. Only
+// Android needs it: libcurl is built there with CURL_CA_BUNDLE=none, because
+// an app cannot read the system trust store, so without a bundle on disk every
+// HTTPS request fails verification and nothing works at all. Desktop leaves it
+// empty and uses the trust store libcurl was configured with.
+//
+// Call once at startup, before any other thread exists.
+void set_ca_bundle_path(const std::string &path);
+
 } // namespace qobuz

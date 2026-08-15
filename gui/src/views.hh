@@ -149,9 +149,16 @@ constexpr int kLanguageCount = 2;
 // `focusedField` (-1 = none) drives which one shows a cursor. `hoveredAction`
 // (-1 = none) and `pointerDown` drive button hover/press feedback. Fills
 // `hits`.
-void draw_settings(Canvas& c, const Rect& area, const settings::SettingsController& ctl,
-                   const widgets::TextFieldState fields[FieldCount], int focusedField,
-                   int accountListHover, int hoveredAction, bool pointerDown, float rowH,
-                   std::vector<Hit>& hits);
+// `scrollPx` shifts the content up and is clipped to `area`. Two columns fit
+// a desktop window without it; stacked on a phone the screen is taller than
+// the display, and the backup buttons at the bottom — the ones that matter on
+// a second machine — were simply unreachable.
+//
+// Returns the total height of the content drawn, so the caller can clamp its
+// own scroll offset without a second copy of this function's layout maths.
+float draw_settings(Canvas& c, const Rect& area, const settings::SettingsController& ctl,
+                    const widgets::TextFieldState fields[FieldCount], int focusedField,
+                    int accountListHover, int hoveredAction, bool pointerDown, float rowH,
+                    float scrollPx, std::vector<Hit>& hits);
 
 } // namespace gui
