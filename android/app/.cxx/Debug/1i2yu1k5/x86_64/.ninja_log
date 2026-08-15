@@ -284,3 +284,5 @@
 4	931	1786803692440861644	streamer/gui/CMakeFiles/streamer_gui.dir/src/os/android_main.cc.o	790f567c54a61ed0
 4	1625	1786803693125871100	streamer/gui/CMakeFiles/streamer_gui.dir/src/gui_main.cc.o	daeeb5603ac89802
 1625	1773	1786803693266873046	../../../../build/intermediates/cxx/Debug/1i2yu1k5/obj/x86_64/libstreamer_gui.so	33990f562384f909
+3	1569	1786804422479939056	streamer/gui/CMakeFiles/streamer_gui.dir/src/gui_main.cc.o	daeeb5603ac89802
+1569	1717	1786804422623941044	../../../../build/intermediates/cxx/Debug/1i2yu1k5/obj/x86_64/libstreamer_gui.so	33990f562384f909

@@ -35,6 +35,7 @@
 #include <api/service.hh>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -796,12 +797,69 @@ std::string previewCell(int row, int col) {
 // channel it had to say it on was stdout. A GUI started from a desktop icon
 // has no console attached and an Android app has nowhere to attach one, so
 // this is what the frame loop reads to draw the progress strip.
-struct DownloadUi {
-    mutable std::mutex m;
+// What the progress strip draws, written by download threads and read by the
+// frame loop.
+//
+// ── Why the mutex is private ────────────────────────────────────────────────
+//
+// Writing this is only half of a correct update. The other half is WAKING the
+// frame loop, which is asleep in pump() with no timeout — a worker thread
+// storing a number changes nothing on screen by itself.
+//
+// Six places used to lock `m` directly and exactly one of them woke the loop
+// (the progress sink). The five that did not included the one that matters
+// most: `active = false`, the moment a download FINISHES. The measured symptom
+// was a strip stuck at "99%, ETA 00:00" that completed the instant the user
+// touched the screen — the touch was a real event, and finishing was not.
+//
+// So the mutex is private and `update()` is the only way in. Locking it by
+// hand no longer compiles, which is the point: this cannot be got wrong again
+// by forgetting, only by deliberately adding a second path.
+class DownloadUi {
+public:
     dl::Progress p;
     bool active = false;
     int queueDone = 0, queueTotal = 0;  // position within a multi-album batch
     std::string note;                   // the last thing that went wrong
+
+    // Set once by run(), before anything can start a download. Atomic because
+    // the download threads read it while the UI thread wrote it.
+    std::atomic<Host*> host{nullptr};
+
+    // Mutate under the lock, then ring the doorbell. Safe from any thread.
+    template <class Fn>
+    void update(Fn&& fn) {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            fn();
+        }
+        // OUTSIDE the lock: postAppEvent writes an eventfd, and doing that
+        // while holding a mutex the UI thread is about to want turns a
+        // wake-up into a stall.
+        if (Host* h = host.load(std::memory_order_relaxed)) h->postAppEvent(0);
+    }
+
+    // One consistent copy for the frame about to be drawn — never field by
+    // field, or the percentage and the "finished" flag could come from either
+    // side of the same update.
+    struct Snapshot {
+        dl::Progress p;
+        bool active = false;
+        int queueDone = 0, queueTotal = 0;
+        std::string note;
+        bool done = false;   // finished, and there was something to finish
+    };
+    Snapshot read() const {
+        std::lock_guard<std::mutex> lk(m_);
+        Snapshot s;
+        s.p = p; s.active = active;
+        s.queueDone = queueDone; s.queueTotal = queueTotal; s.note = note;
+        s.done = !active && queueTotal > 0;
+        return s;
+    }
+
+private:
+    mutable std::mutex m_;
 };
 DownloadUi g_dl;
 
@@ -809,15 +867,14 @@ void download_async(account::Pool* pool, const account::Selector& sel,
                     std::string quality, std::string download_dir,
                     int concurrency, std::vector<std::string> ids) {
     if (concurrency < 1) concurrency = 1;
-    {
-        std::lock_guard<std::mutex> lk(g_dl.m);
+    g_dl.update([&] {
         g_dl.active     = true;
         g_dl.queueDone  = 0;
         g_dl.queueTotal = (int)ids.size();
         g_dl.note.clear();
         g_dl.p = dl::Progress{};
         g_dl.p.label = "Starting ...";
-    }
+    });
     std::thread([pool, sel, quality, download_dir, concurrency, ids]() {
         for (int idx : pool->candidates(sel)) {
             auto svc = pool->acquire(idx);
@@ -825,13 +882,9 @@ void download_async(account::Pool* pool, const account::Selector& sel,
                 account::Failure f = account::classify(svc.error());
                 pool->record_fail(idx, f, svc.error().message);
                 std::fprintf(stderr, "[download] %s\n", svc.error().message.c_str());
-                {
-                    std::lock_guard<std::mutex> lk(g_dl.m);
-                    g_dl.note = svc.error().message;
-                }
+                g_dl.update([&] { g_dl.note = svc.error().message; });
                 if (!account::should_failover(f)) {
-                    std::lock_guard<std::mutex> lk(g_dl.m);
-                    g_dl.active = false;
+                    g_dl.update([&] { g_dl.active = false; });
                     return;
                 }
                 continue;
@@ -846,22 +899,21 @@ void download_async(account::Pool* pool, const account::Selector& sel,
                                   concurrency, true, true);
                 std::fprintf(stderr, "[download] %s (%s): %s\n", id.c_str(),
                              country.c_str(), ok ? "done" : "failed");
-                std::lock_guard<std::mutex> lk(g_dl.m);
-                ++g_dl.queueDone;
-                if (!ok) g_dl.note = "Failed: " + id;
+                g_dl.update([&] {
+                    ++g_dl.queueDone;
+                    if (!ok) g_dl.note = "Failed: " + id;
+                });
             }
-            {
-                std::lock_guard<std::mutex> lk(g_dl.m);
-                g_dl.active = false;
-            }
+            // The end of the run, and the update that used to be missed: the
+            // last progress callback drew 99% and nothing woke the loop again.
+            g_dl.update([&] { g_dl.active = false; });
             return;
         }
         std::fprintf(stderr, "[download] no account could authenticate\n");
-        {
-            std::lock_guard<std::mutex> lk(g_dl.m);
+        g_dl.update([&] {
             g_dl.active = false;
             g_dl.note = "No account could authenticate";
-        }
+        });
     }).detach();
 }
 
@@ -1146,12 +1198,17 @@ int StreamerApp::run(const Options& opts) {
         refreshDownloaded();
     }
 
+    // Where the download threads find the loop they have to wake. Set BEFORE
+    // the sink is installed and before any download can be started, which is
+    // the only ordering that matters: a null host here means an update that
+    // stores correctly and never appears.
+    g_dl.host.store(host_, std::memory_order_relaxed);
+
     // Route the download meter here instead of to a terminal nobody is
     // looking at. Installed once, for the life of the process; the sink runs
-    // on the download worker threads, so it does nothing but store.
-    dl::set_progress_sink([this](const dl::Progress& p) {
-        {
-            std::lock_guard<std::mutex> lk(g_dl.m);
+    // on the download worker threads, and update() both stores and wakes.
+    dl::set_progress_sink([](const dl::Progress& p) {
+        g_dl.update([&] {
             if (!p.error.empty()) {
                 // A failure ends the attempt as far as the user is concerned.
                 // It has to replace the meter, not sit behind it: a bar frozen
@@ -1161,14 +1218,7 @@ int StreamerApp::run(const Options& opts) {
             } else {
                 g_dl.p = p;
             }
-        }
-        // Outside the lock, and the reason the frame loop can sleep: this runs
-        // on a download worker, which cannot draw and must not block. Waking
-        // the UI thread is safe from any thread by contract, and the three
-        // integers are ignored on the way back — StreamerApp::onAppEvent only
-        // marks the frame dirty. Without this the strip would sit still until
-        // the user happened to move the pointer.
-        if (host_) host_->postAppEvent(0);
+        });
     });
 
     // An alias, not an object: the FrameInput belongs to FrameInputView, which
@@ -1196,19 +1246,11 @@ int StreamerApp::run(const Options& opts) {
         // while one is running the loop stops waiting a full second for an
         // input event it will not get — otherwise the percentage would step
         // once a second and read as a hang rather than as progress.
-        dl::Progress dlp;
-        bool dlActive = false, dlDone = false;
-        int dlQueueDone = 0, dlQueueTotal = 0;
-        std::string dlNote;
-        {
-            std::lock_guard<std::mutex> lk(g_dl.m);
-            dlp = g_dl.p;
-            dlActive = g_dl.active;
-            dlQueueDone = g_dl.queueDone;
-            dlQueueTotal = g_dl.queueTotal;
-            dlNote = g_dl.note;
-            dlDone = !g_dl.active && g_dl.queueTotal > 0;
-        }
+        const DownloadUi::Snapshot dls = g_dl.read();
+        const dl::Progress& dlp = dls.p;
+        const bool dlActive = dls.active, dlDone = dls.done;
+        const int dlQueueDone = dls.queueDone, dlQueueTotal = dls.queueTotal;
+        const std::string& dlNote = dls.note;
         // haveWork = "do not sleep, I have a frame to build". Everything else
         // blocks in the kernel until something happens, which is what keeps an
         // idle window (and a phone's battery) at zero cost.
