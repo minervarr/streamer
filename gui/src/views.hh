@@ -106,6 +106,15 @@ constexpr int kTypePickerCount = 6;
 // Filled with the streamer results table's columns (Title/Artist/Label/...).
 const std::vector<widgets::TableColumn>& searchTableColumns();
 
+// The subset of the above that `widthPx` can show legibly, dropping from the
+// right until every remaining column clears the minimum readable width.
+//
+// The same rule on every platform, because it asks the WINDOW and not the OS:
+// a narrow desktop window shows what a phone shows, and a tablet in landscape
+// shows what a desktop shows. Squeezing all eleven into 720 px instead gives a
+// header of ellipses — less information than three columns, not more.
+std::vector<widgets::TableColumn> searchTableColumnsFor(float widthPx);
+
 // Maps a clicked table-header column index (see ActTableHeaderBase) back to
 // the SearchController::SortColumn it represents (None for the "Sel" column,
 // which isn't sortable).

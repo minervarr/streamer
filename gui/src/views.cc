@@ -4,6 +4,7 @@
 #include "animated_float.hh"
 #include "msdf.hh"       // FontStyle
 #include "text_util.hh"  // truncateToWidth
+#include "ui_orientation.hh"  // app_shell: the ONE portrait/landscape rule
 
 #include <search.hh>  // search::fmt_duration
 
@@ -12,12 +13,53 @@
 
 namespace gui {
 
+// Below this a column shows an ellipsis and nothing else. Used both by the
+// drag-to-resize clamp further down and by searchTableColumnsFor(), which is
+// the point: "too narrow to read" is one number, not two opinions.
+constexpr float kMinColumnPx = 48.0f;
+
 const std::vector<widgets::TableColumn>& searchTableColumns() {
+    // Ordered by how much a reader needs them, most first. That order is also
+    // the order they are DROPPED in when the window is too narrow to pay for
+    // them — see searchTableColumnsFor() — so it is load-bearing, not cosmetic.
     static const std::vector<widgets::TableColumn> cols = {
         {"Sel", 0.5f}, {"Title", 2.2f}, {"Artist", 1.6f}, {"Label", 1.3f},
         {"Date", 0.8f}, {"Duration", 0.8f}, {"Genre", 1.0f}, {"Hi-Res", 0.7f},
         {"Explicit", 0.8f}, {"Type", 0.8f}, {"Country", 0.8f},
     };
+    return cols;
+}
+
+std::vector<widgets::TableColumn> searchTableColumnsFor(float widthPx) {
+    // As many columns as the width can show LEGIBLY, never all eleven squeezed.
+    //
+    // Eleven columns across a 720 px phone gives the first one 32 px, and the
+    // measured result is a header row of seven ellipses: every cell truncated
+    // to nothing, so the table shows less information than three columns would
+    // have. Dropping is strictly better than squeezing — a column you cannot
+    // read is not a column.
+    //
+    // Driven by the WIDTH and nothing else, which is what makes it the same
+    // rule everywhere: a narrow desktop window shows exactly what the phone
+    // shows, and a tablet in landscape shows exactly what the desktop shows.
+    // No platform is asked, so no platform can disagree.
+    std::vector<widgets::TableColumn> cols = searchTableColumns();
+
+    // Sel, Title and Artist stay whatever happens. Selection is the only way
+    // to act on a row, and a result you cannot identify is not a result — at
+    // that point the screen has failed regardless of how it is laid out.
+    constexpr size_t kAlwaysShown = 3;
+
+    while (cols.size() > kAlwaysShown) {
+        float sum = 0.0f, smallest = cols.front().weight;
+        for (const auto& c : cols) {
+            sum += c.weight;
+            smallest = std::min(smallest, c.weight);
+        }
+        // The narrowest column is the one that fails first, so it decides.
+        if (sum <= 0.0f || widthPx * (smallest / sum) >= kMinColumnPx) break;
+        cols.pop_back();
+    }
     return cols;
 }
 
@@ -31,7 +73,6 @@ constexpr widgets::TextFit kCellFit{/*shrink=*/false, /*minScale=*/1.0f, /*ellip
 constexpr float kCellTextScale = 0.36f;
 constexpr float kCellPadScale  = 0.25f;
 constexpr float kResizeStripPx = 6.0f;
-constexpr float kMinColumnPx   = 48.0f;
 
 std::string cellForResult(const search::SearchController& ctl, int row, int col) {
     const auto& r = ctl.results()[(size_t)row];
@@ -195,7 +236,7 @@ void draw_search(Canvas& c, const Rect& area, const search::SearchController& ct
     float tableH = (area.y + area.h) - y - bottomBarH - pad;
     if (tableH < 0.0f) tableH = 0.0f;
     Rect tableArea = {area.x, y, area.w, tableH};
-    auto cols = searchTableColumns();
+    auto cols = searchTableColumnsFor(tableArea.w);
     widgets::TableStyle tstyle;
     tstyle.headerBg = theme::kPanel; tstyle.headerText = theme::kText;
     tstyle.headerHover = theme::kTrack; tstyle.sortGlyph = theme::kAccent;
@@ -448,7 +489,13 @@ float draw_settings(Canvas& c, const Rect& area, const settings::SettingsControl
     // fields ended up narrower than the labels sitting next to them — so the
     // second column goes underneath instead. Same content, same order, and
     // on any landscape window nothing changes at all.
-    bool narrow = area.w < area.h;
+    //
+    // autoOrientationFor() rather than a local `w < h`, because this comparison
+    // was written out in three places and three places is where a rule starts
+    // disagreeing with itself. It also decides the question from the WINDOW and
+    // never from the platform, which is what makes a narrow desktop window look
+    // like the phone and a landscape tablet look like the desktop.
+    bool narrow = autoOrientationFor((int)area.w, (int)area.h) == UiOrientation::Vertical;
     float colW = narrow ? area.w : area.w * 0.48f;
     Rect leftCol = {area.x, y, colW, area.h};
     float ly = leftCol.y;

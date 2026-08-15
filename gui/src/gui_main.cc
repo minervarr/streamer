@@ -23,6 +23,7 @@
 #include "search_controller.hh"
 #include "service_factory.hh"
 #include "streamer_app.hh"
+#include "ui_orientation.hh"  // app_shell: the ONE portrait/landscape rule
 #include "theme.hh"
 #include "views.hh"
 
@@ -691,6 +692,56 @@ int run_selftest() {
     // window: RasterFont bakes on the CPU, so the metrics that decide whether
     // Russian looks spread out are checkable here rather than by eye.
     glyph_selftest([](bool cond, const char* what) { check(cond, what); });
+
+    // ── The standardisation rule, pinned ────────────────────────────────────
+    //
+    // One layout decided by the WINDOW, never by the platform. These assert it
+    // in the only way that can be checked without a screen: the same width
+    // must give the same answer whatever is running it.
+    {
+        const size_t all = gui::searchTableColumns().size();
+        check(all == 11, "the search table defines eleven columns");
+
+        // A desktop window affords every column.
+        check(gui::searchTableColumnsFor(1920.0f).size() == all,
+              "1920px shows every column");
+        check(gui::searchTableColumnsFor(1280.0f).size() == all,
+              "1280px still shows every column");
+
+        // A phone upright does not, and drops rather than squeezing: eleven
+        // across 720px gives the first one 32px, which draws an ellipsis and
+        // nothing else.
+        const auto narrow = gui::searchTableColumnsFor(720.0f);
+        check(narrow.size() < all, "720px drops columns instead of squeezing");
+        check(narrow.size() >= 3, "720px still keeps Sel, Title and Artist");
+        check(narrow[0].label == "Sel" && narrow[1].label == "Title" &&
+              narrow[2].label == "Artist",
+              "the columns that survive are the first three, in order");
+
+        // Monotonic: a wider window never shows FEWER columns. Without this a
+        // resize could take information away as it gained room.
+        size_t prev = 0;
+        bool monotonic = true;
+        for (float w = 200.0f; w <= 2000.0f; w += 20.0f) {
+            const size_t n = gui::searchTableColumnsFor(w).size();
+            if (n < prev) monotonic = false;
+            prev = n;
+        }
+        check(monotonic, "widening the window never removes a column");
+
+        // Degenerate widths answer, rather than looping or returning nothing.
+        check(gui::searchTableColumnsFor(0.0f).size() == 3, "zero width keeps the three");
+        check(gui::searchTableColumnsFor(-100.0f).size() == 3, "negative width keeps the three");
+
+        // The orientation rule is the window's shape and nothing else, so a
+        // desktop window this shape must answer exactly as the phone does.
+        check(autoOrientationFor(720, 1640) == UiOrientation::Vertical,
+              "a phone upright is Vertical");
+        check(autoOrientationFor(720, 1640) == autoOrientationFor(720, 1640),
+              "the same shape always answers the same");
+        check(autoOrientationFor(1640, 720) == UiOrientation::Horizontal,
+              "the same phone on its side is Horizontal, like a desktop");
+    }
 
     if (g_fail_count == 0) {
         std::printf("selftest: ok (%d assertions)\n", g_check_count);
@@ -1592,7 +1643,8 @@ int StreamerApp::run(const Options& opts) {
             // the width is comfortable on a desktop window and unreadable on
             // a phone, where 30% of 720px cannot hold "Search Library
             // Settings" — so upright, it gets the full content width.
-            const bool narrow = w < h;
+            const bool narrow =
+                autoOrientationFor((int)w, (int)h) == UiOrientation::Vertical;
             const float contentX = w * 0.04f + safe.left;
             const float contentW = w * 0.92f - safe.left - safe.right;
             Rect navRow = {contentX, h * 0.02f + safe.top,
