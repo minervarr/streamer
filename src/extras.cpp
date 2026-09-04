@@ -6,7 +6,7 @@
 #include <fstream>
 
 #include <nlohmann/json.hpp>
-#include <ae/http.hh>
+#include <arc/http.hh>
 #include <api/service.hh>
 #include <api/requests.hh>
 
@@ -15,7 +15,7 @@ namespace fs = std::filesystem;
 namespace extras {
 
 // Download url to dest using the CDN client; skip if dest already exists.
-static void download_file(const ae::HttpClient &client,
+static void download_file(const arc::HttpClient &client,
                           const std::string &url,
                           const fs::path &dest,
                           const char *label)

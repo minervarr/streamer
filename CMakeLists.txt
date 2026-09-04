@@ -117,7 +117,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}")
 set(KOBUZAPI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/first_party/KawusapiCC")
 
 # ── bundled curl + taglib ───────────────────────────────────────────────────
-# Desktop only. On Android, ae_net and ae_tag cross-compile their own curl
+# Desktop only. On Android, arc_net and arc_tag cross-compile their own curl
 # (with mbedTLS, since the NDK ships no TLS and Android exposes no readable
 # trust store) and their own TagLib — see archive_engine/core/net/CMakeLists.txt
 # and .../tag/CMakeLists.txt, whose `if(ANDROID)` branches are the supported
@@ -197,13 +197,13 @@ configure_file(
 
 endif() # NOT ANDROID
 
-# ── Kobuzapi++ (KawusapiCC/core: kobuzapi_core, ae_util, ae_net, ae_tag) ────
+# ── Kobuzapi++ (KawusapiCC/core: kobuzapi_core, arc_util, arc_net, arc_tag) ────
 # CURL::libcurl and `tag` (TagLib) targets above must exist before this —
-# KawusapiCC/core's ae_net/ae_tag CMakeLists.txt link against them directly
+# KawusapiCC/core's arc_net/arc_tag CMakeLists.txt link against them directly
 # instead of streamer re-implementing http.cc/tag.cc compilation itself.
 add_subdirectory(${KOBUZAPI_ROOT}/core ${CMAKE_BINARY_DIR}/kobuzapi_core)
 if(NOT ANDROID)
-    target_include_directories(ae_tag PRIVATE
+    target_include_directories(arc_tag PRIVATE
         "${CMAKE_BINARY_DIR}/taglib_flat_include"   # flat <taglib/...> layout
     )
 endif()

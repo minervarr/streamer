@@ -3,7 +3,7 @@ project(streamer_android LANGUAGES C CXX)
 
 # The Android build is the *same* project, not a fork of it. The repo root
 # already knows what to leave out here — its `if(NOT ANDROID)` blocks skip the
-# vendored curl/TagLib (ae_net and ae_tag cross-compile their own, with mbedTLS
+# vendored curl/TagLib (arc_net and arc_tag cross-compile their own, with mbedTLS
 # for the missing NDK TLS) and the CLI binary (no argv, no terminal) — and
 # gui/CMakeLists.txt builds libstreamer_gui.so instead of an executable.
 #
