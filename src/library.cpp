@@ -8,6 +8,8 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <sqlite3.h>
 
@@ -17,7 +19,34 @@ namespace library {
 
 namespace {
 
-constexpr int SCHEMA_VERSION = 1;
+constexpr int SCHEMA_VERSION = 2;
+
+// Applied on every connection. The catalog is rewritten on every download and
+// re-read while the GUI is drawing, on machines that often have a slow disk
+// and another writer in the same process.
+//
+// WAL + synchronous=NORMAL is the combination SQLite documents for this:
+// a crash cannot corrupt the file, and the common case stops fsyncing every
+// commit. A power loss can drop the last transaction; `library scan` rebuilds
+// the catalog from the files, which is the recovery path anyway.
+//
+// The page cache is pinned at 2 MiB (negative cache_size is kibibytes) so a
+// SQLite built with a large default cannot sit on RAM this process does not
+// have. mmap covers the hot pages without a second copy. temp_store keeps
+// the sort for the album list off the disk. busy_timeout is what stops a
+// download's commit from making list_albums fail and look like an empty
+// library — without it the second connection gets SQLITE_BUSY immediately.
+//
+// journal_mode is best-effort: a few filesystems reject WAL, and the rest of
+// the pragmas still apply.
+void tune(sqlite3 *db) {
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA cache_size=-2048;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA mmap_size=16777216;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA busy_timeout=5000;", nullptr, nullptr, nullptr);
+}
 
 fs::path db_path(const std::string &root) {
     return fs::u8path(root) / ".streamer" / "library.db";
@@ -43,6 +72,7 @@ struct Db {
             throw std::runtime_error(msg);
         }
         sqlite3_exec(db, "PRAGMA foreign_keys=ON;", nullptr, nullptr, nullptr);
+        tune(db);
         migrate();
     }
     ~Db() { if (db) sqlite3_close(db); }
@@ -59,10 +89,13 @@ struct Db {
         return v;
     }
 
-    // Version 0 means "no schema yet". Later versions append their ALTERs
-    // here as additional `if (v < N)` blocks, each bumping user_version.
+    // Version 0 means "no schema yet". Later versions append their changes
+    // as additional `if (v < N)` blocks. user_version is bumped once, after
+    // every block that applies, so a failure in a later block retries.
     void migrate() {
-        if (user_version() >= SCHEMA_VERSION) return;
+        int v = user_version();
+        if (v >= SCHEMA_VERSION) return;
+        if (v < 1) {
         static const char *kSchema = R"sql(
 CREATE TABLE IF NOT EXISTS artists (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, bio TEXT,
@@ -141,6 +174,22 @@ LEFT JOIN genres g   ON g.id = al.genre_id;
             sqlite3_free(err);
             throw std::runtime_error("Cannot create library schema: " + msg);
         }
+        }
+        // v2: the album list used to run four correlated subqueries per row.
+        // These two indexes are what the single-pass query in list_albums
+        // actually seeks. Created outside the v1 script so an existing
+        // catalog (user_version already 1) grows them on next open.
+        if (v < 2) {
+            char *err = nullptr;
+            if (sqlite3_exec(db,
+                    "CREATE INDEX IF NOT EXISTS assets_album_kind ON assets(album_id, kind);"
+                    "CREATE INDEX IF NOT EXISTS albums_updated ON albums(updated_at);",
+                    nullptr, nullptr, &err) != SQLITE_OK) {
+                std::string msg = err ? err : "unknown error";
+                sqlite3_free(err);
+                throw std::runtime_error("Cannot index library: " + msg);
+            }
+        }
         sqlite3_exec(db, ("PRAGMA user_version=" + std::to_string(SCHEMA_VERSION)).c_str(),
                      nullptr, nullptr, nullptr);
     }
@@ -190,6 +239,14 @@ struct Stmt {
             throw std::runtime_error(std::string("write failed: ") +
                                      sqlite3_errmsg(sqlite3_db_handle(st)));
         }
+    }
+
+    // For a statement executed once per row. sqlite3_step leaves it spent;
+    // the next bind has to start over or it writes nothing and reports success.
+    void reset() {
+        sqlite3_reset(st);
+        sqlite3_clear_bindings(st);
+        next = 1;
     }
 };
 
@@ -527,6 +584,31 @@ constexpr const char *kAlbumSelect =
     "LEFT JOIN artists ar ON ar.id=al.artist_id "
     "LEFT JOIN labels  lb ON lb.id=al.label_id ";
 
+// The whole catalog in one pass. kAlbumSelect's four correlated subqueries
+// re-walk files for every album, which is what made opening the library screen
+// scale with albums × files. file_stats and covers each touch their table
+// once. MIN(country) / MIN(rel_path) stand in for the old "any one row" LIMIT
+// 1: an album lives under a single country, and one cover path is all the
+// grid draws. Aggregates skip NULL, matching the old IS NOT NULL filter.
+constexpr const char *kAlbumListSelect =
+    "WITH file_stats AS ("
+    "  SELECT t.album_id AS album_id, COUNT(*) AS nfiles,"
+    "         SUM(IFNULL(f.bytes,0)) AS nbytes, MIN(f.country) AS country"
+    "  FROM files f JOIN tracks t ON t.id=f.track_id"
+    "  GROUP BY t.album_id),"
+    "covers AS ("
+    "  SELECT album_id, MIN(rel_path) AS rel_path FROM assets"
+    "  WHERE kind='cover' GROUP BY album_id) "
+    "SELECT al.id, al.title, al.version, ar.name, lb.name, al.release_date_original,"
+    "       al.tracks_count, IFNULL(file_stats.nfiles,0), file_stats.country,"
+    "       covers.rel_path, IFNULL(file_stats.nbytes,0) "
+    "FROM albums al "
+    "LEFT JOIN artists ar ON ar.id=al.artist_id "
+    "LEFT JOIN labels  lb ON lb.id=al.label_id "
+    "LEFT JOIN file_stats ON file_stats.album_id=al.id "
+    "LEFT JOIN covers ON covers.album_id=al.id "
+    "ORDER BY al.updated_at DESC LIMIT ?";
+
 } // namespace
 
 void record_download(const std::string &root, const kb::Album &album,
@@ -650,8 +732,7 @@ std::vector<AlbumEntry> list_albums(const std::string &root, uint32_t limit) {
     std::vector<AlbumEntry> out;
     guarded("list albums", [&] {
         Db db(db_path(root));
-        Stmt s(db.db, (std::string(kAlbumSelect) +
-                       "ORDER BY al.updated_at DESC LIMIT ?").c_str());
+        Stmt s(db.db, kAlbumListSelect);
         s.bind(static_cast<int>(limit));
         while (s.step()) out.push_back(row_to_album(s.st));
     });
@@ -804,19 +885,20 @@ ScanReport scan(const std::string &root, const AlbumFetcher &fetch_album, bool d
         Db db(db_path(root));
 
         // Everything the catalog currently claims, so anything left over at
-        // the end is a row whose file has gone.
-        std::map<std::string, int64_t> claimed;   // rel_path -> track_id
+        // the end is a row whose file has gone. One read of `files`: the old
+        // code scanned it twice into two std::maps (node-allocated, and the
+        // second map existed only to compare sizes).
+        struct ClaimedFile { int64_t track_id; int64_t bytes; };
+        std::unordered_map<std::string, ClaimedFile> claimed;
         {
-            Stmt s(db.db, "SELECT rel_path, track_id, bytes FROM files");
-            while (s.step()) claimed.emplace(col_text(s.st, 0), sqlite3_column_int64(s.st, 1));
-        }
-        std::map<std::string, int64_t> recorded_bytes;
-        {
-            Stmt s(db.db, "SELECT rel_path, IFNULL(bytes,-1) FROM files");
-            while (s.step()) recorded_bytes.emplace(col_text(s.st, 0), sqlite3_column_int64(s.st, 1));
+            Stmt s(db.db, "SELECT rel_path, track_id, IFNULL(bytes,-1) FROM files");
+            while (s.step())
+                claimed.emplace(col_text(s.st, 0),
+                                ClaimedFile{sqlite3_column_int64(s.st, 1),
+                                            sqlite3_column_int64(s.st, 2)});
         }
 
-        std::set<int64_t> known_tracks;
+        std::unordered_set<int64_t> known_tracks;
         {
             Stmt s(db.db, "SELECT id FROM tracks");
             while (s.step()) known_tracks.insert(sqlite3_column_int64(s.st, 0));
@@ -866,8 +948,7 @@ ScanReport scan(const std::string &root, const AlbumFetcher &fetch_album, bool d
             auto existing = claimed.find(rel);
             if (existing != claimed.end()) {
                 int64_t on_disk = static_cast<int64_t>(fs::file_size(it->path(), ec));
-                auto was = recorded_bytes.find(rel);
-                if (!ec && was != recorded_bytes.end() && was->second != on_disk) {
+                if (!ec && existing->second.bytes != on_disk) {
                     if (!dry_run) {
                         upsert_file(db.db, root, *tid, abs,
                                     dl::format_id_to_quality(format_id_from_path(abs)),
@@ -940,22 +1021,34 @@ ScanReport scan(const std::string &root, const AlbumFetcher &fetch_album, bool d
             }
         }
 
+        // Owners, loaded once after the walk so albums adopted above are
+        // visible. The old code ran SELECT 1 per sidecar.
+        std::unordered_set<std::string> known_albums;
+        std::unordered_set<int64_t> known_artists;
+        {
+            Stmt s(db.db, "SELECT id FROM albums");
+            while (s.step()) known_albums.insert(col_text(s.st, 0));
+        }
+        {
+            Stmt s(db.db, "SELECT id FROM artists");
+            while (s.step()) known_artists.insert(sqlite3_column_int64(s.st, 0));
+        }
+
         // Second pass: every album row now exists, so the FK will hold.
+        Stmt insert_asset(db.db,
+            "INSERT INTO assets (kind,album_id,artist_id,rel_path,bytes) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(rel_path) DO UPDATE SET "
+            "kind=excluded.kind, bytes=excluded.bytes");
         for (const auto &asset : pending_assets) {
             const char *kind = asset_kind_for(fs::u8path(asset.abs_path).filename().u8string());
             if (!kind) continue;
             // Both columns are foreign keys; inserting against a row that is
             // not there throws and would abort the whole scan.
             bool owner_known = false;
-            if (!asset.album_id.empty()) {
-                Stmt s(db.db, "SELECT 1 FROM albums WHERE id=?");
-                s.bind(asset.album_id);
-                owner_known = s.step();
-            } else if (asset.artist_id != 0) {
-                Stmt s(db.db, "SELECT 1 FROM artists WHERE id=?");
-                s.bind(static_cast<int64_t>(asset.artist_id));
-                owner_known = s.step();
-            }
+            if (!asset.album_id.empty())
+                owner_known = known_albums.count(asset.album_id) != 0;
+            else if (asset.artist_id != 0)
+                owner_known = known_artists.count(static_cast<int64_t>(asset.artist_id)) != 0;
             if (!owner_known) {
                 ++report.unknown;   // orphan sidecar we cannot attach to anything
                 continue;
@@ -963,27 +1056,27 @@ ScanReport scan(const std::string &root, const AlbumFetcher &fetch_album, bool d
             if (!dry_run) {
                 std::error_code sec;
                 auto size = fs::file_size(fs::u8path(asset.abs_path), sec);
-                Stmt s(db.db,
-                    "INSERT INTO assets (kind,album_id,artist_id,rel_path,bytes) "
-                    "VALUES (?,?,?,?,?) ON CONFLICT(rel_path) DO UPDATE SET "
-                    "kind=excluded.kind, bytes=excluded.bytes");
-                s.bind(std::string(kind));
-                if (asset.album_id.empty()) s.bind_null(); else s.bind(asset.album_id);
-                if (asset.artist_id == 0) s.bind_null();
-                else s.bind(static_cast<int64_t>(asset.artist_id));
-                s.bind(relative_to(root, asset.abs_path));
-                if (sec) s.bind_null(); else s.bind(static_cast<int64_t>(size));
-                s.run();
+                insert_asset.reset();
+                insert_asset.bind(std::string(kind));
+                if (asset.album_id.empty()) insert_asset.bind_null();
+                else insert_asset.bind(asset.album_id);
+                if (asset.artist_id == 0) insert_asset.bind_null();
+                else insert_asset.bind(static_cast<int64_t>(asset.artist_id));
+                insert_asset.bind(relative_to(root, asset.abs_path));
+                if (sec) insert_asset.bind_null();
+                else insert_asset.bind(static_cast<int64_t>(size));
+                insert_asset.run();
             }
             ++report.assets;
         }
 
         // Whatever the catalog still claims was never found on disk.
-        for (const auto &[rel, track_id] : claimed) {
+        Stmt del_file(db.db, "DELETE FROM files WHERE rel_path=?");
+        for (const auto &entry : claimed) {
             if (!dry_run) {
-                Stmt s(db.db, "DELETE FROM files WHERE rel_path=?");
-                s.bind(rel);
-                s.run();
+                del_file.reset();
+                del_file.bind(entry.first);
+                del_file.run();
             }
             ++report.removed;
         }
@@ -994,14 +1087,15 @@ ScanReport scan(const std::string &root, const AlbumFetcher &fetch_album, bool d
             Stmt s(db.db, "SELECT rel_path FROM assets");
             while (s.step()) {
                 std::string rel = col_text(s.st, 0);
-                if (!fs::exists(fs::u8path(root) / fs::u8path(rel))) stale_assets.push_back(rel);
+                if (!fs::exists(fs::u8path(root) / fs::u8path(rel))) stale_assets.push_back(std::move(rel));
             }
         }
+        Stmt del_asset(db.db, "DELETE FROM assets WHERE rel_path=?");
         for (const auto &rel : stale_assets) {
             if (!dry_run) {
-                Stmt s(db.db, "DELETE FROM assets WHERE rel_path=?");
-                s.bind(rel);
-                s.run();
+                del_asset.reset();
+                del_asset.bind(rel);
+                del_asset.run();
             }
             ++report.removed;
         }

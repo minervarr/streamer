@@ -362,6 +362,31 @@ int run_selftest() {
              "list_albums reports the registered cover asset's path");
         check(listed.size() == 1 && listed[0].bytes_on_disk == 3000,
              "list_albums sums the album's file sizes (cover art is not track bytes)");
+        check(listed.size() == 1 && listed[0].files_on_disk == 2,
+             "list_albums counts the album's files in one pass");
+
+        // scan() now keeps one map of the catalog instead of two, and deletes
+        // through a reused statement. Same tree the delete checks below use,
+        // put back together afterwards so those checks still see both files.
+        {
+            auto clean = library::scan(root, nullptr, /*dry_run=*/true);
+            check(clean.removed == 0 && clean.adopted == 0 && clean.updated == 0,
+                 "scan --dry-run of a catalog that matches disk changes nothing");
+        }
+        fs::resize_file(trackA, 100);
+        fs::remove(trackB);
+        auto scanned = library::scan(root, nullptr, /*dry_run=*/false);
+        check(scanned.updated == 1,
+             "scan rewrites a row whose size on disk no longer matches");
+        check(scanned.removed == 1,
+             "scan drops the row of a file that is no longer on disk");
+        auto afterScan = library::list_albums(root, 50);
+        check(afterScan.size() == 1 && afterScan[0].files_on_disk == 1 &&
+              afterScan[0].bytes_on_disk == 100,
+             "after scan the album list matches the one file still on disk");
+        write_file(albumDir / "101.6.flac", 1000);
+        write_file(albumDir / "102.6.flac", 2000);
+        library::record_download(root, album, {trackA, trackB}, "flac", 6, "US");
 
         // Dry run must report exactly what a real run would, and touch nothing.
         auto dry = library::delete_album(root, "ALBUM1", /*dry_run=*/true);

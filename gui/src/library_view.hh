@@ -15,6 +15,7 @@
 #include "texture.hh"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -43,7 +44,7 @@ enum LibraryAction : int {
 class CoverCache {
 public:
     // `renderer` must outlive the cache. Textures are destroyed by clear().
-    explicit CoverCache(Renderer* renderer) : renderer_(renderer) {}
+    explicit CoverCache(Renderer* renderer);
     ~CoverCache() { clear(); }
     CoverCache(const CoverCache&) = delete;
     CoverCache& operator=(const CoverCache&) = delete;
@@ -53,6 +54,12 @@ public:
     // failed, or this frame's decode budget is already spent and the cover
     // will appear on a later frame.
     TextureHandle get(const std::string& albumId, const std::string& path, int targetPx);
+
+    // Texture already decided for `albumId` (loaded, or a remembered failure).
+    // Empty when this album has not been seen yet — the caller builds a path
+    // and calls get(). Keeps the steady-state grid from allocating a
+    // filesystem path for every visible tile on every frame.
+    std::optional<TextureHandle> peek(const std::string& albumId);
 
     // Call once per frame before drawing. Resets the per-frame decode budget
     // that keeps a fast scroll through an unseen part of the library from
@@ -71,7 +78,7 @@ public:
     void rebind(Renderer* renderer);
 
     size_t budget = 64;          // max live textures
-    int loadsPerFrame = 4;       // max decodes per frame
+    int loadsPerFrame = 2;       // overwritten from the core count in the ctor
 
 private:
     struct Item {

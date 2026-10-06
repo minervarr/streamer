@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <thread>
 
 namespace gui {
 
@@ -83,7 +84,24 @@ void drawNoArtwork(Canvas& c, float x, float y, float side, float rowH) {
 
 // ── CoverCache ──────────────────────────────────────────────────────────────
 
+CoverCache::CoverCache(Renderer* renderer) : renderer_(renderer) {
+    // One decode is a JPEG plus a resample, on the frame thread. Two of those
+    // stay inside a frame on a slow core; more cores finish each one faster,
+    // so they can start more without the scroll hitching.
+    unsigned hw = std::thread::hardware_concurrency();
+    if (hw >= 8) loadsPerFrame = 4;
+    else if (hw >= 4) loadsPerFrame = 3;
+    else loadsPerFrame = 2;
+}
+
 void CoverCache::beginFrame() { loadsLeft_ = loadsPerFrame; }
+
+std::optional<TextureHandle> CoverCache::peek(const std::string& albumId) {
+    auto it = items_.find(albumId);
+    if (it == items_.end()) return std::nullopt;
+    it->second.lastUsed = ++clock_;
+    return it->second.tex;
+}
 
 void CoverCache::clear() {
     if (renderer_) {
@@ -237,8 +255,11 @@ void draw_library(Canvas& c, const Rect& area, const libmgr::LibraryController& 
             // foreground image would otherwise draw on top of the dialog.
             // Under the scrim these placeholders are barely distinguishable
             // from the dimmed covers they stand in for.
-            TextureHandle tex = modal ? kInvalidTexture
-                                      : covers.get(album.id, ctl.cover_path(album), coverPx);
+            TextureHandle tex = kInvalidTexture;
+            if (!modal) {
+                if (auto have = covers.peek(album.id)) tex = *have;
+                else tex = covers.get(album.id, ctl.cover_path(album), coverPx);
+            }
             if (modal)
                 c.rect(tx, ty, g.tileW, g.tileW, theme::kPanel);
             else if (tex != kInvalidTexture)

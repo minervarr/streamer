@@ -240,8 +240,13 @@ bool SearchController::search(const std::string& query_text, const std::string& 
     // same as the Win32 GUI's QueryParser-driven filtering.
     std::vector<std::pair<int, query_dsl::SearchResult>> scored;
     scored.reserve(results_.size());
-    for (auto& r : results_)
-        if (query_dsl::Match(ast, r)) scored.emplace_back(query_dsl::Score(ast, r), r);
+    for (auto& r : results_) {
+        if (!query_dsl::Match(ast, r)) continue;
+        // Score before the move. Argument order is unspecified, so scoring
+        // inside emplace_back alongside std::move(r) can rank a moved-from row.
+        int score = query_dsl::Score(ast, r);
+        scored.emplace_back(score, std::move(r));
+    }
     std::stable_sort(scored.begin(), scored.end(),
         [](auto& a, auto& b) { return a.first > b.first; });
 
@@ -272,19 +277,40 @@ int SearchController::sort_priority(SortColumn col) const {
 }
 
 namespace {
-bool LessAt(SortColumn col, const query_dsl::SearchResult& a, const query_dsl::SearchResult& b) {
+// Byte-wise ASCII fold, same result as LowerAscii() then operator<, without
+// allocating two copies of the field per comparison. stable_sort calls this
+// O(n log n) times and used to do it twice per call (both directions).
+int CmpAsciiLower(const std::string& a, const std::string& b) {
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)std::tolower((unsigned char)a[i]);
+        unsigned char cb = (unsigned char)std::tolower((unsigned char)b[i]);
+        if (ca != cb) return ca < cb ? -1 : 1;
+    }
+    if (a.size() == b.size()) return 0;
+    return a.size() < b.size() ? -1 : 1;
+}
+
+template <typename T>
+int CmpLess(const T& a, const T& b) {
+    if (a < b) return -1;
+    if (b < a) return 1;
+    return 0;
+}
+
+int CmpAt(SortColumn col, const query_dsl::SearchResult& a, const query_dsl::SearchResult& b) {
     switch (col) {
-        case SortColumn::Title:    return LowerAscii(a.title)  < LowerAscii(b.title);
-        case SortColumn::Artist:   return LowerAscii(a.artist) < LowerAscii(b.artist);
-        case SortColumn::Label:    return LowerAscii(a.label)  < LowerAscii(b.label);
-        case SortColumn::Date:     return a.date < b.date;
-        case SortColumn::Duration: return a.duration < b.duration;
-        case SortColumn::Genre:    return LowerAscii(a.genre)  < LowerAscii(b.genre);
-        case SortColumn::HiRes:    return a.hires < b.hires;
-        case SortColumn::Explicit: return a.explicit_ < b.explicit_;
-        case SortColumn::Type:     return a.type < b.type;
-        case SortColumn::Country:  return LowerAscii(a.country) < LowerAscii(b.country);
-        default: return false;
+        case SortColumn::Title:    return CmpAsciiLower(a.title, b.title);
+        case SortColumn::Artist:   return CmpAsciiLower(a.artist, b.artist);
+        case SortColumn::Label:    return CmpAsciiLower(a.label, b.label);
+        case SortColumn::Date:     return CmpLess(a.date, b.date);
+        case SortColumn::Duration: return CmpLess(a.duration, b.duration);
+        case SortColumn::Genre:    return CmpAsciiLower(a.genre, b.genre);
+        case SortColumn::HiRes:    return CmpLess(a.hires, b.hires);
+        case SortColumn::Explicit: return CmpLess(a.explicit_, b.explicit_);
+        case SortColumn::Type:     return CmpLess(a.type, b.type);
+        case SortColumn::Country:  return CmpAsciiLower(a.country, b.country);
+        default: return 0;
     }
 }
 } // namespace
@@ -302,10 +328,9 @@ void ApplySort(std::vector<query_dsl::SearchResult>& results, const std::vector<
     std::stable_sort(results.begin(), results.end(),
         [&](const query_dsl::SearchResult& a, const query_dsl::SearchResult& b) {
             for (const auto& key : keys) {
-                bool ab = LessAt(key.col, a, b);
-                bool ba = LessAt(key.col, b, a);
-                if (ab == ba) continue;  // tied under this key — fall through to the next
-                return key.asc ? ab : ba;
+                int c = CmpAt(key.col, a, b);
+                if (c == 0) continue;  // tied under this key — fall through to the next
+                return key.asc ? c < 0 : c > 0;
             }
             return false;  // equal under every key
         });

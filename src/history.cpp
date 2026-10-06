@@ -29,6 +29,15 @@ struct Db {
             db = nullptr;
             throw std::runtime_error(msg);
         }
+        // Same tuning as library.cpp's tune(): a history row used to fsync
+        // on every download, and a second connection (export while recording)
+        // used to fail immediately with SQLITE_BUSY.
+        sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "PRAGMA cache_size=-2048;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "PRAGMA mmap_size=16777216;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "PRAGMA busy_timeout=5000;", nullptr, nullptr, nullptr);
         sqlite3_exec(db,
             "CREATE TABLE IF NOT EXISTS downloads ("
             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"

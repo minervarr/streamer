@@ -62,14 +62,18 @@ std::vector<int>      g_sizes;
 std::vector<uint32_t> g_seen;
 bool                  g_seen_dirty = false;
 
-// Codepoints worth baking whether or not any text on screen uses them yet:
-// cheap, bounded, and enough to cover most European-language metadata outright
-// with no scan involved. Cyrillic is here specifically because it was the bug
-// — left out, it fell through to a CJK face's full-width metrics.
+// Codepoints worth baking before any text has been seen. ASCII + Latin-1
+// covers the UI's own EN/ES strings. Latin Extended, Greek, Cyrillic, Han,
+// Kana and Hangul are NOT here: each one is a cell per size per phase per
+// weight, and baking the whole of Greek+Cyrillic at startup was several
+// thousand cells (and a multi-megabyte atlas) on a machine that may never
+// display them. refresh_glyphs() scans whatever text is actually on screen,
+// and a miss bakes on the next frame. Face selection is unchanged — the
+// primary face is still asked first, which is what keeps Cyrillic off the
+// full-width CJK metrics. That decision happens at bake time, not by being
+// in this list.
 void appendBaseCharset(std::vector<uint32_t>& cps) {
     for (uint32_t cp = 0x0020; cp <= 0x00FF; cp++) cps.push_back(cp);  // ASCII + Latin-1
-    for (uint32_t cp = 0x0100; cp <= 0x024F; cp++) cps.push_back(cp);  // Latin Ext-A/B
-    for (uint32_t cp = 0x0370; cp <= 0x04FF; cp++) cps.push_back(cp);  // Greek + Cyrillic
 
     // General punctuation this UI's own prose and real metadata actually use.
     // A missing em dash is worse than a wrong glyph: nothing about a blank gap
